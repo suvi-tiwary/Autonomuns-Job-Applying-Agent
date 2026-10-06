@@ -29,8 +29,8 @@ India remote
     payload = {
         "api_key": TAVILY_API_KEY,
         "query": query,
-        "search_depth": "advanced",
-        "max_results": 10
+        "search_depth": "basic",
+        "max_results": 3
     }
 
     request = urllib.request.Request(

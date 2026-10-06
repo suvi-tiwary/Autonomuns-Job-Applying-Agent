@@ -2,18 +2,16 @@ import json
 import os
 from pypdf import PdfReader
 import urllib.request
+import urllib.error
+from dotenv import load_dotenv
 
+load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-GROQ_MODEL = os.getenv(
-    "GROQ_MODEL",
-    "llama-3.3-70b-versatile"
-)
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
+GROQ_MODEL = (os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b").strip()
 
 
 def extract_pdf_text(pdf_path):
-
     reader = PdfReader(pdf_path)
 
     text = ""
@@ -91,17 +89,48 @@ RESUME:
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AIJobAgent/1.0"
         },
         method="POST"
     )
 
-    with urllib.request.urlopen(request, timeout=60) as response:
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            result = json.loads(
+                response.read().decode("utf-8")
+            )
 
-        result = json.loads(
-            response.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8")
+
+        print("====================================")
+        print("GROQ API ERROR")
+        print("STATUS:", e.code)
+        print("DETAIL:", error_body)
+        print("====================================")
+
+        raise RuntimeError(
+            f"Groq API error {e.code}: {error_body}"
         )
 
-    content = result["choices"][0]["message"]["content"]
+    except urllib.error.URLError as e:
+        print("====================================")
+        print("GROQ CONNECTION ERROR")
+        print("DETAIL:", e.reason)
+        print("====================================")
 
-    return json.loads(content)
+        raise RuntimeError(
+            f"Could not connect to Groq: {e.reason}"
+        )
+
+    content = result["choices"][0]["message"]["content"].strip()
+
+    if content.startswith("```json"):
+        content = content[7:]
+    elif content.startswith("```"):
+        content = content[3:]
+    if content.endswith("```"):
+        content = content[:-3]
+
+    return json.loads(content.strip())

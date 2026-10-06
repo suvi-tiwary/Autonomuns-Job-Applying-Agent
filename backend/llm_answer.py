@@ -1,14 +1,12 @@
 import os
 import json
 import urllib.request
+from dotenv import load_dotenv
 
+load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-GROQ_MODEL = os.getenv(
-    "GROQ_MODEL",
-    "llama-3.3-70b-versatile"
-)
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
+GROQ_MODEL = (os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b").strip()
 
 
 def generate_answer(
@@ -92,7 +90,8 @@ inside the application form.
         data=data,
         headers={
             "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AIJobAgent/1.0"
         },
         method="POST"
     )
