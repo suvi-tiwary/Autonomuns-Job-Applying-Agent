@@ -1,0 +1,298 @@
+import os
+import json
+import sqlite3
+import hashlib
+from typing import Optional, Dict, Any, List, Tuple
+from datetime import datetime
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jobmate.db")
+
+
+def get_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    # Enable WAL mode for better concurrency
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
+
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Profiles table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            email TEXT,
+            phone TEXT,
+            location TEXT,
+            skills TEXT,
+            experience_years TEXT,
+            education TEXT,
+            resume_filename TEXT,
+            resume_path TEXT,
+            full_profile_json TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Jobs table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            company TEXT,
+            location TEXT,
+            url TEXT UNIQUE,
+            description TEXT,
+            match_score REAL DEFAULT 0,
+            source TEXT,
+            status TEXT DEFAULT 'new',
+            raw_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Applications table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS applications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT,
+            job_title TEXT,
+            company TEXT,
+            job_url TEXT,
+            status TEXT,
+            result_json TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def save_profile(profile_data: Dict[str, Any], resume_path: str = "", resume_filename: str = "") -> Dict[str, Any]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    name = profile_data.get("name") or profile_data.get("full_name") or ""
+    email = profile_data.get("email") or ""
+    phone = profile_data.get("phone") or ""
+    location = profile_data.get("location") or ""
+    skills = json.dumps(profile_data.get("skills", []), ensure_ascii=False)
+    exp = str(profile_data.get("experience_years", "") or profile_data.get("experience", ""))
+    edu = str(profile_data.get("education", "") or profile_data.get("college", ""))
+    profile_json = json.dumps(profile_data, ensure_ascii=False)
+
+    # Upsert latest profile (single active profile)
+    cursor.execute("SELECT id FROM profiles ORDER BY id DESC LIMIT 1")
+    row = cursor.fetchone()
+
+    if row:
+        cursor.execute("""
+            UPDATE profiles SET
+                name = ?,
+                email = ?,
+                phone = ?,
+                location = ?,
+                skills = ?,
+                experience_years = ?,
+                education = ?,
+                resume_filename = ?,
+                resume_path = ?,
+                full_profile_json = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (name, email, phone, location, skills, exp, edu, resume_filename, resume_path, profile_json, row["id"]))
+    else:
+        cursor.execute("""
+            INSERT INTO profiles (
+                name, email, phone, location, skills, experience_years,
+                education, resume_filename, resume_path, full_profile_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, email, phone, location, skills, exp, edu, resume_filename, resume_path, profile_json))
+
+    conn.commit()
+    conn.close()
+    return profile_data
+
+
+def get_active_profile() -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[str]]:
+    """Returns (profile_dict, resume_path, resume_filename) or (None, None, None)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM profiles ORDER BY id DESC LIMIT 1")
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None, None, None
+
+    try:
+        profile = json.loads(row["full_profile_json"]) if row["full_profile_json"] else {}
+    except Exception:
+        profile = {
+            "name": row["name"],
+            "email": row["email"],
+            "phone": row["phone"],
+            "location": row["location"],
+            "skills": json.loads(row["skills"]) if row["skills"] else [],
+            "experience_years": row["experience_years"],
+            "education": row["education"]
+        }
+
+    return profile, row["resume_path"], row["resume_filename"]
+
+
+def _generate_job_id(job: Dict[str, Any]) -> str:
+    if job.get("id"):
+        return str(job["id"])
+    url = job.get("url") or job.get("link") or ""
+    title = job.get("title") or job.get("job_title") or ""
+    company = job.get("company") or ""
+    raw = f"{url}|{title}|{company}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def save_jobs(jobs_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not jobs_list:
+        return []
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    saved = []
+    for job in jobs_list:
+        job_dict = dict(job)
+        job_id = _generate_job_id(job_dict)
+        job_dict["id"] = job_id
+
+        title = job_dict.get("title") or job_dict.get("job_title") or "Untitled Role"
+        company = job_dict.get("company") or job_dict.get("company_name") or "Company"
+        location = job_dict.get("location") or "Remote / Not Specified"
+        url = job_dict.get("url") or job_dict.get("link") or job_dict.get("job_url") or f"job-{job_id}"
+        description = job_dict.get("description") or job_dict.get("snippet") or ""
+        match_score = float(job_dict.get("match_score", job_dict.get("similarity", 85.0)) or 85.0)
+        source = job_dict.get("source") or "search"
+        status = job_dict.get("status") or "new"
+        raw_json = json.dumps(job_dict, ensure_ascii=False)
+
+        cursor.execute("""
+            INSERT INTO jobs (id, title, company, location, url, description, match_score, source, status, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+                title = excluded.title,
+                company = excluded.company,
+                location = excluded.location,
+                description = excluded.description,
+                match_score = excluded.match_score,
+                source = excluded.source,
+                raw_json = excluded.raw_json
+        """, (job_id, title, company, location, url, description, match_score, source, status, raw_json))
+        saved.append(job_dict)
+
+    conn.commit()
+    conn.close()
+    return saved
+
+
+def get_jobs(limit: int = 100) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM jobs
+        ORDER BY match_score DESC, created_at DESC
+        LIMIT ?
+    """, (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = []
+    for row in rows:
+        try:
+            job_obj = json.loads(row["raw_json"]) if row["raw_json"] else {}
+        except Exception:
+            job_obj = {}
+
+        # Ensure base columns are set
+        job_obj["id"] = row["id"]
+        job_obj["title"] = row["title"]
+        job_obj["company"] = row["company"]
+        job_obj["location"] = row["location"]
+        job_obj["url"] = row["url"]
+        job_obj["description"] = row["description"]
+        job_obj["match_score"] = row["match_score"]
+        job_obj["source"] = row["source"]
+        job_obj["status"] = row["status"]
+        job_obj["created_at"] = row["created_at"]
+        result.append(job_obj)
+
+    return result
+
+
+def clear_jobs():
+    conn = get_db_connection()
+    conn.execute("DELETE FROM jobs")
+    conn.commit()
+    conn.close()
+
+
+def save_application(job_url: str, job_title: str = "", company: str = "", status: str = "started", result: Any = None) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    result_json = json.dumps(result, ensure_ascii=False) if result is not None else "{}"
+
+    cursor.execute("""
+        INSERT INTO applications (job_url, job_title, company, status, result_json)
+        VALUES (?, ?, ?, ?, ?)
+    """, (job_url, job_title, company, status, result_json))
+    app_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return app_id
+
+
+def update_application(app_id: int, status: str, result: Any = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    result_json = json.dumps(result, ensure_ascii=False) if result is not None else "{}"
+
+    cursor.execute("""
+        UPDATE applications
+        SET status = ?, result_json = ?
+        WHERE id = ?
+    """, (status, result_json, app_id))
+    conn.commit()
+    conn.close()
+
+
+def get_applications(limit: int = 50) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM applications
+        ORDER BY timestamp DESC
+        LIMIT ?
+    """, (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = []
+    for row in rows:
+        try:
+            res_data = json.loads(row["result_json"]) if row["result_json"] else {}
+        except Exception:
+            res_data = {}
+
+        result.append({
+            "id": row["id"],
+            "job_url": row["job_url"],
+            "job_title": row["job_title"],
+            "company": row["company"],
+            "status": row["status"],
+            "result": res_data,
+            "timestamp": row["timestamp"]
+        })
+    return result

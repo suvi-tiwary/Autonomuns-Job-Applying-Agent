@@ -1,11 +1,8 @@
 def normalize(text):
-    return " ".join(
-        text.lower().strip().split()
-    )
+    return " ".join((text or "").lower().strip().split())
 
 
 def detect_profile_field(field):
-
     text = normalize(" ".join([
         field.get("type", ""),
         field.get("name", ""),
@@ -16,47 +13,23 @@ def detect_profile_field(field):
     ]))
 
     # EMAIL
-    if (
-        "email" in text
-        or field.get("type") == "email"
-        or field.get("autocomplete") == "email"
-    ):
+    if "email" in text or field.get("type") == "email" or field.get("autocomplete") == "email":
         return "email"
 
     # PHONE
-    if any(word in text for word in [
-        "phone",
-        "mobile",
-        "telephone",
-        "contact number",
-        "phone number"
-    ]):
+    if any(word in text for word in ["phone", "mobile", "telephone", "contact number", "phone number", "cell"]):
         return "phone"
 
     # FIRST NAME
-    if any(word in text for word in [
-        "first name",
-        "firstname",
-        "given name",
-        "forename"
-    ]):
+    if any(word in text for word in ["first name", "firstname", "given name", "forename"]):
         return "first_name"
 
     # LAST NAME
-    if any(word in text for word in [
-        "last name",
-        "lastname",
-        "surname",
-        "family name"
-    ]):
+    if any(word in text for word in ["last name", "lastname", "surname", "family name"]):
         return "last_name"
 
     # FULL NAME
-    if any(word in text for word in [
-        "full name",
-        "candidate name",
-        "your name"
-    ]):
+    if any(word in text for word in ["full name", "candidate name", "your name", "name"]):
         return "full_name"
 
     # LINKEDIN
@@ -67,54 +40,44 @@ def detect_profile_field(field):
     if "github" in text:
         return "github"
 
-    # PORTFOLIO
-    if any(word in text for word in [
-        "portfolio",
-        "personal website",
-        "website"
-    ]):
+    # PORTFOLIO / WEBSITE
+    if any(word in text for word in ["portfolio", "personal website", "website", "blog", "url"]):
         return "portfolio"
 
     # CITY / LOCATION
-    if any(word in text for word in [
-        "city",
-        "location",
-        "current location",
-        "where are you located"
-    ]):
+    if any(word in text for word in ["city", "location", "current location", "where are you located"]):
         return "location"
 
     # ADDRESS
-    if any(word in text for word in [
-        "address",
-        "street address"
-    ]):
+    if any(word in text for word in ["address", "street address", "residence"]):
         return "address"
 
-    # COLLEGE
-    if any(word in text for word in [
-        "college",
-        "university",
-        "institution",
-        "school"
-    ]):
+    # POSTAL / ZIP
+    if any(word in text for word in ["zip", "postal", "zipcode", "pincode", "pin code"]):
+        return "postal_code"
+
+    # COUNTRY
+    if any(word in text for word in ["country", "nation"]):
+        return "country"
+
+    # STATE
+    if any(word in text for word in ["state", "province", "region"]):
+        return "state"
+
+    # COLLEGE / UNIVERSITY
+    if any(word in text for word in ["college", "university", "institution", "school"]):
         return "college"
 
-    # DEGREE
-    if any(word in text for word in [
-        "degree",
-        "qualification",
-        "education",
-        "academic"
-    ]):
+    # DEGREE / EDUCATION
+    if any(word in text for word in ["degree", "qualification", "education", "academic", "major"]):
         return "education"
 
+    # SKILLS
+    if any(word in text for word in ["skills", "technologies", "tech stack"]):
+        return "skills"
+
     # EXPERIENCE
-    if any(word in text for word in [
-        "years of experience",
-        "experience years",
-        "total experience"
-    ]):
+    if any(word in text for word in ["years of experience", "experience years", "total experience", "yoe"]):
         return "experience_years"
 
     return None

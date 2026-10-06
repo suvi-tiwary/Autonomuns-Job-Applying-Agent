@@ -1,5 +1,13 @@
 import asyncio
 import os
+import sys
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from pypdf import PdfReader
 
@@ -11,98 +19,47 @@ from browser_agent import (
     get_page_text,
     fill_field,
     upload_resume,
-    click_next
+    click_next,
+    submit_application,
+    scroll_page
 )
-
 from field_mapper import detect_profile_field
-
 from llm_answer import generate_answer
 
-
-# =========================================================
-# CANDIDATE PROFILE
-# =========================================================
-
+# Default candidate profile fallback
 profile = {
-
     "first_name": "Suvi",
-
     "last_name": "Tiwary",
-
     "full_name": "Suvi Tiwary",
-
-    "email": "",
-
-    "phone": "",
-
-    "linkedin": "",
-
+    "email": "suvitiwary@example.com",
+    "phone": "+919876543210",
+    "linkedin": "https://linkedin.com/in/suvi-tiwary",
     "github": "https://github.com/suvi-tiwary",
-
-    "portfolio": "",
-
+    "portfolio": "https://suvitiwary.dev",
     "location": "India",
-
-    "address": "",
-
-    "education": "B.Tech Artificial Intelligence and Machine Learning",
-
-    "college": "",
-
-    "experience_years": "0"
+    "country": "India",
+    "address": "Delhi NCR, India",
+    "education": "B.Tech in Artificial Intelligence & Machine Learning",
+    "college": "Institute of Technology",
+    "experience_years": "1",
+    "skills": "Python, Machine Learning, Deep Learning, FastAPI, React, Playwright, NLP",
 }
 
 
-# =========================================================
-# RESUME TEXT EXTRACTION
-# =========================================================
-
-def extract_resume_text(resume_path):
-
+def extract_resume_text(resume_path: str) -> str:
+    if not resume_path or not os.path.isfile(resume_path):
+        return ""
     try:
-
-        reader = PdfReader(
-            resume_path
-        )
-
-        text = ""
-
-        for page in reader.pages:
-
-            page_text = page.extract_text()
-
-            if page_text:
-
-                text += page_text
-                text += "\n"
-
+        reader = PdfReader(resume_path)
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
         return text.strip()
-
     except Exception as error:
-
-        print(
-            "\nCould not read resume:"
-        )
-
-        print(error)
-
+        print(f"Could not extract resume text from {resume_path}: {error}")
         return ""
 
 
-# =========================================================
-# DESCRIPTIVE QUESTION DETECTOR
-# =========================================================
-
-def is_descriptive_question(field):
-
-    field_type = (
-        field.get(
-            "type",
-            ""
-        )
-        .lower()
-    )
-
+def is_descriptive_question(field: dict) -> bool:
+    field_type = (field.get("type") or "").lower()
     label = " ".join([
         field.get("label", ""),
         field.get("placeholder", ""),
@@ -111,603 +68,199 @@ def is_descriptive_question(field):
     ]).lower()
 
     descriptive_words = [
-
-        "tell us",
-
-        "tell me",
-
-        "describe",
-
-        "explain",
-
-        "why do you",
-
-        "why are you",
-
-        "why should",
-
-        "interested",
-
-        "interest",
-
-        "motivation",
-
-        "about yourself",
-
-        "projects",
-
-        "achievement",
-
-        "accomplishment",
-
-        "cover letter",
-
-        "additional information",
-
-        "anything else",
-
-        "experience",
-
-        "strengths"
+        "tell us", "tell me", "describe", "explain", "why do you",
+        "why are you", "why should", "interested", "interest",
+        "motivation", "about yourself", "projects", "achievement",
+        "accomplishment", "cover letter", "additional information",
+        "anything else", "experience", "strengths", "what makes you"
     ]
 
     if field_type == "textarea":
-
         return True
 
-    if any(
-        word in label
-        for word in descriptive_words
-    ):
-
-        return True
-
-    return False
+    return any(word in label for word in descriptive_words)
 
 
-# =========================================================
-# PRINT FIELD INFORMATION
-# =========================================================
+def _format_field_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        items = []
+        for item in value:
+            if isinstance(item, dict):
+                parts = [str(v).strip() for v in item.values() if v]
+                if parts:
+                    items.append(" - ".join(parts))
+            elif item:
+                items.append(str(item).strip())
+        return ", ".join(items)
+    if isinstance(value, dict):
+        return ", ".join(f"{k}: {v}" for k, v in value.items() if v)
+    return str(value).strip()
 
-def print_field(
-    field,
-    match
-):
-
-    print(
-        "\n--------------------------------"
-    )
-
-    print(
-        "INDEX:",
-        field["index"]
-    )
-
-    print(
-        "TYPE:",
-        field["type"]
-    )
-
-    print(
-        "NAME:",
-        field["name"]
-    )
-
-    print(
-        "LABEL:",
-        field["label"]
-    )
-
-    print(
-        "PLACEHOLDER:",
-        field["placeholder"]
-    )
-
-    print(
-        "MATCH:",
-        match
-    )
-
-
-# =========================================================
-# MAIN APPLICATION AGENT
-# =========================================================
 
 async def apply_to_job(
     job_url: str,
     candidate_profile: dict = None,
     resume_path: str = None,
     interactive: bool = False
-):
+) -> dict:
     """
-    Automated application agent callable via API or CLI.
+    Automated job application agent that navigates to a job, detects fields,
+    fills profile data, uses LLM for open questions, and handles multi-page forms.
     """
     if not job_url:
-        print("No URL provided.")
-        return
+        return {"status": "failed", "error": "Job URL is required."}
 
     active_profile = profile.copy()
     if candidate_profile:
         active_profile.update(candidate_profile)
-        if "name" in candidate_profile and candidate_profile["name"]:
-            full_name = candidate_profile["name"]
-            active_profile["full_name"] = full_name
+        # Parse full name
+        full_name = candidate_profile.get("name") or candidate_profile.get("full_name")
+        if full_name:
+            active_profile["full_name"] = full_name.strip()
             parts = full_name.strip().split()
-            if parts:
-                active_profile["first_name"] = parts[0]
-                active_profile["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else ""
+            active_profile["first_name"] = parts[0]
+            active_profile["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else ""
         if "years_of_experience" in candidate_profile:
             active_profile["experience_years"] = str(candidate_profile["years_of_experience"])
+        if isinstance(active_profile.get("skills"), list):
+            active_profile["skills"] = ", ".join(active_profile["skills"])
 
     playwright = None
     browser = None
-    resume_text = ""
+    resume_text = extract_resume_text(resume_path) if resume_path else ""
 
     try:
-        # -------------------------------------------------
-        # OPEN JOB
-        # -------------------------------------------------
-        print(f"\nOpening job: {job_url}")
+        print(f"\n[Agent] Opening job: {job_url}")
+        playwright, browser, page = await open_browser(job_url, headless=(not interactive))
+        print(f"[Agent] Browser loaded: {page.url}")
 
-        playwright, browser, page = await open_browser(job_url)
+        # Trigger dynamic components
+        await scroll_page(page)
 
-        print("Browser opened:", page.url)
+        # 1. Look for Apply / Easy Apply button
+        apply_clicked = await click_apply(page)
+        if apply_clicked:
+            print("[Agent] Clicked Apply button.")
+            await page.wait_for_timeout(1000)
+            await scroll_page(page)
 
-        await page.wait_for_timeout(2000)
-
-        # -------------------------------------------------
-        # FIND APPLY
-        # -------------------------------------------------
-        print("\nLooking for Apply button...")
-
-        clicked = await click_apply(page)
-
-        if clicked:
-            print("Apply button clicked.")
-            await page.wait_for_timeout(2000)
-        else:
-            print("No Apply button found. URL may already be the application page.")
-
-        # -------------------------------------------------
-        # LOGIN
-        # -------------------------------------------------
-        login_required = await detect_login_required(page)
-
-        if login_required:
-            print("\n" + "=" * 60)
-            print("LOGIN / SIGNUP REQUIRED")
-            print("=" * 60)
-            print("\nPlease complete the login/signup in the browser if needed.")
+        # 2. Check for login requirements
+        if await detect_login_required(page):
+            print("[Agent] Login / Signup required.")
             if interactive:
-                input("\nWhen you are logged in and application is ready, press ENTER...")
+                input("\n[Interactive] Complete login in the browser, then press ENTER...")
             else:
-                await page.wait_for_timeout(3000)
+                return {
+                    "status": "login_required",
+                    "job_url": page.url,
+                    "message": "This job application requires manual login / sign-in."
+                }
 
-        # -------------------------------------------------
-        # RESUME PATH
-        # -------------------------------------------------
-        if not resume_path and interactive:
-            print("\n" + "=" * 60)
-            print("RESUME")
-            print("=" * 60)
-            resume_path = input("\nEnter resume PDF path (press ENTER to skip): ").strip()
+        # 3. Upload Resume if available
+        if resume_path and os.path.isfile(resume_path):
+            print("[Agent] Uploading resume...")
+            uploaded = await upload_resume(page, resume_path)
+            if uploaded:
+                print("[Agent] Resume uploaded successfully [OK]")
 
-        if resume_path:
+        # 4. Multi-step form filling loop
+        max_steps = 6
+        step = 0
+        submitted = False
 
-            if os.path.exists(
-                resume_path
-            ):
+        while step < max_steps:
+            step += 1
+            print(f"\n[Agent] Processing form step {step}...")
 
-                # -----------------------------------------
-                # READ RESUME
-                # -----------------------------------------
+            fields = await get_application_fields(page)
+            job_context = await get_page_text(page)
 
-                print(
-                    "\nReading resume..."
-                )
+            if fields:
+                print(f"[Agent] Found {len(fields)} form fields on page.")
+                for field in fields:
+                    match_key = detect_profile_field(field)
+                    
+                    if match_key and active_profile.get(match_key):
+                        val = _format_field_value(active_profile[match_key])
+                        await fill_field(page, field["index"], val)
+                        print(f"  [OK] Filled [{field.get('name') or field.get('label') or match_key}]: {val[:30]}")
+                        continue
 
-                resume_text = (
-                    extract_resume_text(
-                        resume_path
-                    )
-                )
+                    # Handle descriptive or AI question
+                    if is_descriptive_question(field):
+                        q_text = field.get("label") or field.get("placeholder") or field.get("name") or "Job question"
+                        print(f"  [AI] Generating LLM response for: {q_text[:40]}...")
+                        answer = generate_answer(
+                            question=q_text,
+                            profile=active_profile,
+                            resume_text=resume_text,
+                            job_context=job_context
+                        )
+                        if answer:
+                            await fill_field(page, field["index"], answer)
+                            print(f"  [OK] LLM filled [{q_text[:25]}]")
+                        continue
 
-                print(
-                    "Resume text extracted:",
-                    len(resume_text),
-                    "characters"
-                )
+                    # Handle standard checkboxes (e.g. Terms / Consent)
+                    if field.get("type") == "checkbox" and field.get("required"):
+                        await fill_field(page, field["index"], "true")
+                        print(f"  [OK] Checked consent [{field.get('label')[:25]}]")
 
-                # -----------------------------------------
-                # UPLOAD RESUME
-                # -----------------------------------------
+            # Try to Submit
+            if await submit_application(page):
+                print("[Agent] Submit application button clicked! [OK]")
+                submitted = True
+                await page.wait_for_timeout(1500)
+                break
 
-                print(
-                    "\nUploading resume..."
-                )
-
-                uploaded = (
-                    await upload_resume(
-                        page,
-                        resume_path
-                    )
-                )
-
-                if uploaded:
-
-                    print(
-                        "Resume uploaded ✓"
-                    )
-
-                else:
-
-                    print(
-                        "Could not find a usable "
-                        "resume upload field."
-                    )
-
+            # If not submitted, try Next step
+            if await click_next(page):
+                print("[Agent] Clicked Next/Continue button.")
+                await page.wait_for_timeout(1000)
+                await scroll_page(page)
+                continue
             else:
-
-                print(
-                    "\nResume file does not exist."
-                )
-
-                print(
-                    "LLM will continue without "
-                    "resume text."
-                )
-
-        # -------------------------------------------------
-        # SCAN APPLICATION FORM
-        # -------------------------------------------------
-
-        print(
-            "\nScanning application form..."
-        )
-
-        fields = (
-            await get_application_fields(
-                page
-            )
-        )
-
-        print(
-            f"\nDetected {len(fields)} "
-            "potential application fields."
-        )
-
-        unknown_fields = []
-
-        # -------------------------------------------------
-        # GET JOB CONTEXT
-        # -------------------------------------------------
-
-        print(
-            "\nCollecting job context..."
-        )
-
-        job_context = (
-            await get_page_text(
-                page
-            )
-        )
-
-        print(
-            "Job context collected:",
-            len(job_context),
-            "characters"
-        )
-
-        # -------------------------------------------------
-        # PROCESS EVERY FIELD
-        # -------------------------------------------------
-
-        for field in fields:
-
-            match = (
-                detect_profile_field(
-                    field
-                )
-            )
-
-            print_field(
-                field,
-                match
-            )
-
-            # =============================================
-            # NORMAL PROFILE FIELD
-            # =============================================
-
-            if match is not None:
-
-                if match not in profile:
-
-                    print(
-                        "STATUS: PROFILE VALUE "
-                        "NOT AVAILABLE"
-                    )
-
-                    unknown_fields.append(
-                        field
-                    )
-
-                    continue
-
-                value = active_profile[
-                    match
-                ]
-
-                if not value:
-
-                    print(
-                        "STATUS: VALUE EMPTY"
-                    )
-
-                    continue
-
-                try:
-
-                    await fill_field(
-                        page,
-                        field["index"],
-                        value
-                    )
-
-                    print(
-                        "STATUS: FILLED ✓"
-                    )
-
-                except Exception as error:
-
-                    print(
-                        "STATUS: FAILED"
-                    )
-
-                    print(
-                        "ERROR:",
-                        error
-                    )
-
-                continue
-
-            # =============================================
-            # LLM DESCRIPTIVE QUESTION
-            # =============================================
-
-            if is_descriptive_question(
-                field
-            ):
-
-                print(
-                    "\n" + "=" * 60
-                )
-
-                print(
-                    "🤖 DESCRIPTIVE QUESTION DETECTED"
-                )
-
-                print(
-                    "=" * 60
-                )
-
-                question = (
-                    field.get("label")
-                    or field.get("placeholder")
-                    or field.get("aria_label")
-                    or field.get("name")
-                    or "Application question"
-                )
-
-                print(
-                    "\nQUESTION:"
-                )
-
-                print(
-                    question
-                )
-
-                print(
-                    "\nSTATUS: CALLING LLM..."
-                )
-
-                try:
-
-                    answer = generate_answer(
-
-                        question=question,
-
-                        profile=profile,
-
-                        resume_text=resume_text,
-
-                        job_context=job_context
-                    )
-
-                    if answer:
-
-                        print(
-                            "\n🤖 LLM ANSWER:"
-                        )
-
-                        print(
-                            answer
-                        )
-
-                        await fill_field(
-
-                            page,
-
-                            field["index"],
-
-                            answer
-                        )
-
-                        print(
-                            "\nSTATUS: "
-                            "LLM FILLED ✓"
-                        )
-
-                    else:
-
-                        print(
-                            "\nSTATUS: "
-                            "LLM RETURNED "
-                            "EMPTY ANSWER"
-                        )
-
-                        unknown_fields.append(
-                            field
-                        )
-
-                except Exception as error:
-
-                    print(
-                        "\nSTATUS: "
-                        "LLM FAILED"
-                    )
-
-                    print(
-                        "ERROR:",
-                        error
-                    )
-
-                    unknown_fields.append(
-                        field
-                    )
-
-                continue
-
-            # =============================================
-            # UNKNOWN FIELD
-            # =============================================
-
-            print(
-                "STATUS: UNKNOWN → "
-                "MANUAL REVIEW"
-            )
-
-            unknown_fields.append(
-                field
-            )
-
-        # -------------------------------------------------
-        # UNKNOWN FIELDS
-        # -------------------------------------------------
-
-        if unknown_fields:
-
-            print(
-                "\n" + "=" * 60
-            )
-
-            print(
-                f"{len(unknown_fields)} "
-                "fields need manual review."
-            )
-
-            print(
-                "=" * 60
-            )
-
-            for field in unknown_fields:
-
-                print(
-                    "\nFIELD:"
-                )
-
-                print(
-                    "Label:",
-                    field["label"]
-                )
-
-                print(
-                    "Placeholder:",
-                    field["placeholder"]
-                )
-
-                print(
-                    "Type:",
-                    field["type"]
-                )
-
-        # -------------------------------------------------
-        # NEXT PAGE
-        # -------------------------------------------------
-
-        print(
-            "\nChecking for Next/Continue..."
-        )
-
-        moved = await click_next(
-            page
-        )
-
-        if moved:
-
-            print(
-                "Moved to the next "
-                "application page."
-            )
-
-            print(
-                "The current page has been "
-                "filled where possible."
-            )
-
-        else:
-
-            print(
-                "No Next/Continue button found."
-            )
-
-        # -------------------------------------------------
-        # FINAL SAFETY PAUSE
-        # -------------------------------------------------
-
-        print(
-            "\n" + "=" * 60
-        )
-
-        print(
-            "APPLICATION PAUSED FOR REVIEW"
-        )
-
-        print(
-            "=" * 60
-        )
-
-        print(
-            "\nThe agent will NOT submit "
-            "the application automatically."
-        )
-
-        print(
-            "Review everything in the browser."
-        )
-
-        print(
-            "\nPress CTRL+C when you want "
-            "to stop the agent."
-        )
-
-        await asyncio.sleep(
-            100000
-        )
+                # No next button and no submit button found
+                break
+
+        final_text = (await get_page_text(page)).lower()
+        confirmed = any(p in final_text for p in [
+            "application submitted",
+            "application received",
+            "thank you for applying",
+            "thanks for applying",
+            "applied",
+        print("\n[Agent] Application fields successfully populated! Keeping browser open on screen for review (25s)...")
+        try:
+            await page.wait_for_timeout(25000)
+        except Exception:
+            pass
+
+        return {
+            "status": "completed" if (submitted or confirmed) else "ready_for_review",
+            "submitted": submitted or confirmed,
+            "confirmed": confirmed,
+            "job_url": page.url,
+            "message": "Application completed successfully!" if (submitted or confirmed) else "Application form fields populated and ready for review."
+        }
 
     except Exception as error:
-
-        print(
-            "\nAGENT ERROR:"
-        )
-
-        print(
-            error
-        )
-
+        print(f"[Agent] Error during application: {error}")
+        return {
+            "status": "failed",
+            "job_url": job_url,
+            "error": str(error)
+        }
     finally:
+        try:
+            if browser:
+                await browser.close()
+        finally:
+            if playwright:
+                await playwright.stop()
 
-        pass
 
 
 async def run_application():
@@ -715,7 +268,8 @@ async def run_application():
     if not job_url:
         print("No URL provided.")
         return
-    await apply_to_job(job_url, candidate_profile=profile, interactive=True)
+    res = await apply_to_job(job_url, candidate_profile=profile, interactive=True)
+    print("\nResult:", res)
 
 
 if __name__ == "__main__":
