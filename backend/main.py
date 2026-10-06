@@ -1,12 +1,27 @@
+import asyncio
+import sys
+
+
+
+from fastapi import FastAPI
 import os
 import shutil
 import tempfile
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from typing import Optional, Dict, Any
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(
+        asyncio.WindowsProactorEventLoopPolicy()
+    )
 from resume_parser import (
     extract_pdf_text,
+
+
     structure_resume
 )
 
@@ -137,14 +152,55 @@ def get_jobs():
 
 @app.get("/api/profile")
 def get_profile():
-
     if not current_profile:
-
         raise HTTPException(
             status_code=404,
             detail="No resume uploaded"
         )
-
     return {
         "profile": current_profile
+    }
+
+
+class ApplyRequest(BaseModel):
+    job: Optional[Dict[str, Any]] = None
+    url: Optional[str] = None
+
+
+@app.post("/apply")
+@app.post("/api/apply")
+async def start_apply(
+    request: ApplyRequest,
+    background_tasks: BackgroundTasks
+):
+    global current_profile
+    global current_resume_path
+
+    job_data = request.job or {}
+    job_url = request.url or job_data.get("url") or job_data.get("link") or job_data.get("job_url")
+
+    if not job_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Job URL is required to start application"
+        )
+
+    async def run_agent_task():
+        try:
+            from application_agent import apply_to_job
+            await apply_to_job(
+                job_url=job_url,
+                candidate_profile=current_profile,
+                resume_path=current_resume_path,
+                interactive=False
+            )
+        except Exception as err:
+            print("Auto-apply agent background error:", err)
+
+    background_tasks.add_task(run_agent_task)
+
+    return {
+        "success": True,
+        "message": f"Application agent started for {job_url}",
+        "job_url": job_url
     }

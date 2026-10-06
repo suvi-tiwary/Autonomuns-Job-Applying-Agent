@@ -213,151 +213,84 @@ def print_field(
 # MAIN APPLICATION AGENT
 # =========================================================
 
-async def run_application():
-
-    # -----------------------------------------------------
-    # ASK FOR JOB URL
-    # -----------------------------------------------------
-
-    job_url = input(
-        "\nPaste the job application URL: "
-    ).strip()
-
+async def apply_to_job(
+    job_url: str,
+    candidate_profile: dict = None,
+    resume_path: str = None,
+    interactive: bool = False
+):
+    """
+    Automated application agent callable via API or CLI.
+    """
     if not job_url:
-
-        print(
-            "No URL provided."
-        )
-
+        print("No URL provided.")
         return
+
+    active_profile = profile.copy()
+    if candidate_profile:
+        active_profile.update(candidate_profile)
+        if "name" in candidate_profile and candidate_profile["name"]:
+            full_name = candidate_profile["name"]
+            active_profile["full_name"] = full_name
+            parts = full_name.strip().split()
+            if parts:
+                active_profile["first_name"] = parts[0]
+                active_profile["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else ""
+        if "years_of_experience" in candidate_profile:
+            active_profile["experience_years"] = str(candidate_profile["years_of_experience"])
 
     playwright = None
     browser = None
-
     resume_text = ""
 
     try:
-
         # -------------------------------------------------
         # OPEN JOB
         # -------------------------------------------------
+        print(f"\nOpening job: {job_url}")
 
-        print(
-            "\nOpening job..."
-        )
+        playwright, browser, page = await open_browser(job_url)
 
-        playwright, browser, page = (
-            await open_browser(
-                job_url
-            )
-        )
+        print("Browser opened:", page.url)
 
-        print(
-            "Browser opened:",
-            page.url
-        )
-
-        await page.wait_for_timeout(
-            2000
-        )
+        await page.wait_for_timeout(2000)
 
         # -------------------------------------------------
         # FIND APPLY
         # -------------------------------------------------
+        print("\nLooking for Apply button...")
 
-        print(
-            "\nLooking for Apply button..."
-        )
-
-        clicked = await click_apply(
-            page
-        )
+        clicked = await click_apply(page)
 
         if clicked:
-
-            print(
-                "Apply button clicked."
-            )
-
-            await page.wait_for_timeout(
-                2000
-            )
-
+            print("Apply button clicked.")
+            await page.wait_for_timeout(2000)
         else:
-
-            print(
-                "No Apply button found."
-            )
-
-            print(
-                "The supplied URL may already "
-                "be the application page."
-            )
+            print("No Apply button found. URL may already be the application page.")
 
         # -------------------------------------------------
         # LOGIN
         # -------------------------------------------------
-
-        login_required = (
-            await detect_login_required(
-                page
-            )
-        )
+        login_required = await detect_login_required(page)
 
         if login_required:
-
-            print(
-                "\n" + "=" * 60
-            )
-
-            print(
-                "LOGIN / SIGNUP REQUIRED"
-            )
-
-            print(
-                "=" * 60
-            )
-
-            print(
-                "\nPlease complete the login/signup "
-                "yourself in the browser."
-            )
-
-            print(
-                "Complete OTP/CAPTCHA manually "
-                "if required."
-            )
-
-            input(
-                "\nWhen you are completely logged in "
-                "and the application page is visible, "
-                "press ENTER here..."
-            )
-
-            await page.wait_for_timeout(
-                1500
-            )
+            print("\n" + "=" * 60)
+            print("LOGIN / SIGNUP REQUIRED")
+            print("=" * 60)
+            print("\nPlease complete the login/signup in the browser if needed.")
+            if interactive:
+                input("\nWhen you are logged in and application is ready, press ENTER...")
+            else:
+                await page.wait_for_timeout(3000)
 
         # -------------------------------------------------
         # RESUME PATH
         # -------------------------------------------------
-
-        print(
-            "\n" + "=" * 60
-        )
-
-        print(
-            "RESUME"
-        )
-
-        print(
-            "=" * 60
-        )
-
-        resume_path = input(
-            "\nEnter resume PDF path "
-            "(press ENTER to skip): "
-        ).strip()
+        if not resume_path and interactive:
+            print("\n" + "=" * 60)
+            print("RESUME")
+            print("=" * 60)
+            resume_path = input("\nEnter resume PDF path (press ENTER to skip): ").strip()
 
         if resume_path:
 
@@ -501,7 +434,7 @@ async def run_application():
 
                     continue
 
-                value = profile[
+                value = active_profile[
                     match
                 ]
 
@@ -777,12 +710,13 @@ async def run_application():
         pass
 
 
-# =========================================================
-# START
-# =========================================================
+async def run_application():
+    job_url = input("\nPaste the job application URL: ").strip()
+    if not job_url:
+        print("No URL provided.")
+        return
+    await apply_to_job(job_url, candidate_profile=profile, interactive=True)
+
 
 if __name__ == "__main__":
-
-    asyncio.run(
-        run_application()
-    )
+    asyncio.run(run_application())
