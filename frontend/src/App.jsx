@@ -12,11 +12,13 @@ import {
 } from "./services/api";
 import JobCard from "./components/JobCard";
 import PlacementCalendar from "./components/PlacementCalendar";
+import Hero from "./components/Hero";
 import "./index.css";
 
 const API_BASE = "http://127.0.0.1:8000";
 
 function App() {
+  const [view, setView] = useState("landing"); // "landing" or "dashboard"
   const [resume, setResume] = useState(null);
   const [resumeName, setResumeName] = useState("");
   const [profileData, setProfileData] = useState(null);
@@ -259,11 +261,15 @@ function App() {
     }
   };
 
+  if (view === "landing") {
+    return <Hero onLaunchAgent={() => setView("dashboard")} />;
+  }
+
   return (
     <div className="app">
       {/* SIDEBAR */}
       <aside className="sidebar">
-        <div className="brand">
+        <div className="brand" onClick={() => setView("landing")} style={{ cursor: "pointer" }} title="Click to view Story Landing">
           <div className="brand-icon">✦</div>
           <div>
             <h2>JobMate</h2>
@@ -296,6 +302,16 @@ function App() {
               {item.label}
             </button>
           ))}
+
+          <button
+            className="nav"
+            style={{ marginTop: "14px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "12px", color: "#a5b4fc" }}
+            onClick={() => setView("landing")}
+            title="Return to the Cinematic Story Presentation"
+          >
+            <span>✨</span>
+            Story Experience
+          </button>
         </nav>
 
         <div className="agent-status">
@@ -319,6 +335,14 @@ function App() {
           </div>
 
           <div className="header-right">
+            <button
+              className="glowing-red-white-btn header-btn"
+              onClick={() => setView("landing")}
+              style={{ fontSize: "11px", padding: "6px 14px", marginRight: "8px" }}
+              title="View Cinematic Story"
+            >
+              <span>✦ Story Landing</span>
+            </button>
             <div className="online">
               <span></span>
               Database Connected
