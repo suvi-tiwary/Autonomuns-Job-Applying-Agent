@@ -123,33 +123,7 @@ async def apply_to_job(
             await page.wait_for_timeout(1200)
             await scroll_page(page)
 
-        # 2. Check for login / authentication walls
-        if await detect_login_required(page):
-            print("[Agent] Login / Account creation required on employer website.")
-            steps_log.append("Manual login / account required on employer site")
-            return {
-                "status": ApplicationStatus.READY_FOR_REVIEW.value,
-                "job_url": page.url,
-                "message": "This employer requires account sign-in. Browser is open on your screen.",
-                "steps_log": steps_log,
-                "filled_fields": filled_fields,
-                "skipped_sensitive_fields": skipped_sensitive_fields
-            }
-
-        # 3. Check for CAPTCHA
-        if await detect_captcha(page):
-            print("[Agent] CAPTCHA detected. Pausing for user interaction.")
-            steps_log.append("CAPTCHA / Security check detected")
-            return {
-                "status": ApplicationStatus.READY_FOR_REVIEW.value,
-                "job_url": page.url,
-                "message": "Security check / CAPTCHA detected. Complete it in the open browser window.",
-                "steps_log": steps_log,
-                "filled_fields": filled_fields,
-                "skipped_sensitive_fields": skipped_sensitive_fields
-            }
-
-        # 4. Upload Resume if available
+        # 2. Upload Resume if available
         if resume_path and os.path.isfile(resume_path):
             print("[Agent] Uploading resume to employer form...")
             uploaded = await upload_resume(page, resume_path)

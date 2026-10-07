@@ -32,6 +32,11 @@ def is_sensitive_question(field: dict) -> bool:
     veteran, sponsorship, criminal, or personal attestation topics.
     These fields must NOT be automatically filled and should be left for manual user review.
     """
+    # Core profile fields are never sensitive questions
+    name_id = (field.get("name", "") + " " + field.get("id", "") + " " + field.get("autocomplete", "")).lower()
+    if any(core in name_id for core in ["first_name", "last_name", "email", "phone", "mobile", "tel", "resume", "cv", "linkedin", "github"]):
+        return False
+
     text = normalize(" ".join([
         field.get("label", ""),
         field.get("placeholder", ""),
@@ -54,7 +59,6 @@ def is_descriptive_question(field: dict) -> bool:
         return not is_sensitive_question(field)
 
     if field_type == "text" and len(label) > 25:
-        # Long prompt like "Why do you want to work at Company?"
         safe_starters = ["why", "tell us", "describe", "what makes you", "experience with", "share a project", "how did you"]
         if any(label.startswith(s) or s in label for s in safe_starters):
             return not is_sensitive_question(field)
@@ -66,88 +70,107 @@ def detect_profile_field(field: dict) -> str:
     """
     Maps DOM input elements to standard candidate profile attributes.
     """
-    # If it's a sensitive topic, do not auto-map to standard profile fields
-    if is_sensitive_question(field):
-        return None
+    field_name = (field.get("name") or "").lower()
+    field_id = (field.get("id") or "").lower()
+    field_type = (field.get("type") or "").lower()
+    autocomplete = (field.get("autocomplete") or "").lower()
+    label = (field.get("label") or "").lower()
+    placeholder = (field.get("placeholder") or "").lower()
 
-    text = normalize(" ".join([
-        field.get("type", ""),
-        field.get("name", ""),
-        field.get("placeholder", ""),
-        field.get("aria_label", ""),
-        field.get("autocomplete", ""),
-        field.get("label", ""),
-        field.get("id", "")
-    ]))
-
-    # EMAIL
-    if "email" in text or field.get("type") == "email" or field.get("autocomplete") == "email":
-        return "email"
-
-    # PHONE
-    if any(word in text for word in ["phone", "mobile", "telephone", "contact number", "phone number", "cell", "tel"]):
-        return "phone"
+    text = normalize(f"{field_type} {field_name} {field_id} {autocomplete} {label} {placeholder}")
 
     # FIRST NAME
-    if any(word in text for word in ["first name", "firstname", "given name", "forename", "first_name"]):
+    if (
+        "first_name" in field_name or "first_name" in field_id or "firstname" in field_name or "firstname" in field_id or
+        "first name" in label or "first name" in placeholder or autocomplete == "given-name" or
+        "given name" in label or "forename" in label
+    ):
         return "first_name"
 
     # LAST NAME
-    if any(word in text for word in ["last name", "lastname", "surname", "family name", "last_name"]):
+    if (
+        "last_name" in field_name or "last_name" in field_id or "lastname" in field_name or "lastname" in field_id or
+        "last name" in label or "last name" in placeholder or autocomplete == "family-name" or
+        "surname" in label or "family name" in label
+    ):
         return "last_name"
 
-    # FULL NAME (only if not specific first/last)
-    if any(word in text for word in ["full name", "candidate name", "your name", "full_name", "applicant name"]):
-        return "full_name"
-    if text == "name" or text == "name *":
+    # EMAIL
+    if (
+        "email" in field_name or "email" in field_id or field_type == "email" or
+        autocomplete == "email" or "email" in label or "email" in placeholder
+    ):
+        return "email"
+
+    # PHONE
+    if (
+        "phone" in field_name or "phone" in field_id or field_type == "tel" or autocomplete == "tel" or
+        "mobile" in field_name or "mobile" in field_id or
+        any(w in label for w in ["phone", "mobile", "contact number", "telephone", "cell"]) or
+        any(w in placeholder for w in ["phone", "mobile"])
+    ):
+        return "phone"
+
+    # FULL NAME (only if first/last not matched)
+    if (
+        "full_name" in field_name or "fullname" in field_name or
+        any(w in label for w in ["full name", "candidate name", "your name", "applicant name"]) or
+        label == "name" or label == "name *"
+    ):
         return "full_name"
 
     # LINKEDIN
-    if "linkedin" in text:
+    if "linkedin" in field_name or "linkedin" in field_id or "linkedin" in label or "linkedin" in placeholder:
         return "linkedin"
 
     # GITHUB
-    if "github" in text:
+    if "github" in field_name or "github" in field_id or "github" in label or "github" in placeholder:
         return "github"
 
     # PORTFOLIO / WEBSITE
-    if any(word in text for word in ["portfolio", "personal website", "website", "blog", "portfolio url"]):
+    if (
+        "portfolio" in text or "website" in text or "blog" in text or
+        "personal url" in label or "website url" in label
+    ):
         return "portfolio"
 
     # CITY / LOCATION
-    if any(word in text for word in ["city", "current city", "current location", "where are you located", "location"]):
+    if (
+        "location" in field_name or "location" in field_id or "city" in field_name or "city" in field_id or
+        any(w in label for w in ["current city", "current location", "where are you located", "location", "city"])
+    ):
         return "location"
 
     # ADDRESS
-    if any(word in text for word in ["street address", "residence address", "address line"]):
+    if "address" in field_name or "address" in field_id or "street address" in label:
         return "address"
 
     # POSTAL / ZIP
-    if any(word in text for word in ["zip", "postal", "zipcode", "pincode", "pin code", "postal code"]):
+    if any(w in text for w in ["zip", "postal", "zipcode", "pincode", "pin code", "postal code"]):
         return "postal_code"
 
     # COUNTRY
-    if any(word in text for word in ["country", "nation"]):
+    if "country" in field_name or "country" in field_id or "country" in label:
         return "country"
 
     # STATE
-    if any(word in text for word in ["state", "province", "region"]):
+    if "state" in field_name or "state" in field_id or "province" in text:
         return "state"
 
     # COLLEGE / UNIVERSITY
-    if any(word in text for word in ["college", "university", "institution", "school name"]):
+    if any(w in text for w in ["college", "university", "institution", "school name"]):
         return "college"
 
     # DEGREE / EDUCATION
-    if any(word in text for word in ["degree", "qualification", "education", "academic discipline", "major"]):
+    if any(w in text for w in ["degree", "qualification", "education", "academic discipline", "major"]):
         return "education"
 
     # SKILLS
-    if any(word in text for word in ["skills", "technologies", "tech stack"]):
+    if any(w in text for w in ["skills", "technologies", "tech stack"]):
         return "skills"
 
     # EXPERIENCE YEARS
-    if any(word in text for word in ["years of experience", "experience years", "total experience", "yoe"]):
+    if any(w in text for w in ["years of experience", "experience years", "total experience", "yoe"]):
         return "experience_years"
 
     return None

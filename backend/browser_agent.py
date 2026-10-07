@@ -92,17 +92,7 @@ async def detect_login_required(page) -> bool:
         return await page.evaluate("""
             () => {
                 const pw = document.querySelector('input[type="password"]:not([style*="display: none"])');
-                if (pw && pw.offsetParent !== null) return true;
-                
-                const bodyText = (document.body.innerText || '').toLowerCase();
-                const loginPhrases = [
-                    'sign in to apply',
-                    'log in to apply',
-                    'login to apply',
-                    'please sign in to continue',
-                    'create an account to apply'
-                ];
-                return loginPhrases.some(phrase => bodyText.includes(phrase));
+                return pw !== null && pw.offsetParent !== null;
             }
         """)
     except Exception:
@@ -114,13 +104,10 @@ async def detect_captcha(page) -> bool:
         return await page.evaluate("""
             () => {
                 const iframes = Array.from(document.querySelectorAll('iframe'));
-                const hasCaptchaFrame = iframes.some(f => {
+                return iframes.some(f => {
                     const src = (f.src || '').toLowerCase();
-                    return src.includes('recaptcha') || src.includes('hcaptcha') || src.includes('cloudflare') || src.includes('turnstile');
+                    return src.includes('recaptcha') || src.includes('hcaptcha') || src.includes('challenges.cloudflare.com');
                 });
-                if (hasCaptchaFrame) return true;
-                const bodyText = (document.body.innerText || '').toLowerCase();
-                return bodyText.includes('please verify you are human') || bodyText.includes('security check');
             }
         """)
     except Exception:
@@ -323,7 +310,17 @@ async def fill_field(page, index: int, value: str):
                 } catch (_) {}
 
                 el.focus();
-                el.value = val;
+                try {
+                    const prototype = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+                    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+                    if (setter) {
+                        setter.call(el, val);
+                    } else {
+                        el.value = val;
+                    }
+                } catch (setErr) {
+                    el.value = val;
+                }
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
                 el.dispatchEvent(new Event('blur', { bubbles: true }));
@@ -397,7 +394,7 @@ async def upload_resume(page, resume_path: str) -> bool:
 
 async def click_apply(page) -> bool:
     """
-    Clicks 'Apply' or 'Apply for this job' on real ATS pages to expand the form.
+    Clicks 'Apply' or 'Apply for this job' on real ATS pages to expand/scroll the form.
     """
     selectors = [
         "a:has-text('Apply for this job')",
@@ -422,11 +419,25 @@ async def click_apply(page) -> bool:
                 await locator.scroll_into_view_if_needed()
                 await locator.click(timeout=3000)
                 await page.wait_for_timeout(1000)
-                return True
+                break
         except Exception:
             continue
 
-    return False
+    # Also ensure smooth scroll to the form container
+    try:
+        await page.evaluate("""
+            () => {
+                const formEl = document.querySelector('form, #app, #application, #application_form, [data-qa="application-form"]');
+                if (formEl) {
+                    formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }
+        """)
+        await page.wait_for_timeout(600)
+    except Exception:
+        pass
+
+    return True
 
 
 async def click_next_step_only(page) -> bool:
