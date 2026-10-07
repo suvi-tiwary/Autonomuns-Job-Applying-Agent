@@ -269,7 +269,7 @@ function App() {
     <div className="app">
       {/* SIDEBAR */}
       <aside className="sidebar">
-        <div className="brand" onClick={() => setView("landing")} style={{ cursor: "pointer" }} title="Click to view Story Landing">
+        <div className="brand">
           <div className="brand-icon">✦</div>
           <div>
             <h2>JobMate</h2>
@@ -305,9 +305,14 @@ function App() {
 
           <button
             className="nav"
-            style={{ marginTop: "14px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "12px", color: "#a5b4fc" }}
+            style={{
+              marginTop: "12px",
+              borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+              paddingTop: "12px",
+              color: "#a5b4fc",
+            }}
             onClick={() => setView("landing")}
-            title="Return to the Cinematic Story Presentation"
+            title="View the Cinematic Story Landing Page"
           >
             <span>✨</span>
             Story Experience
@@ -335,14 +340,6 @@ function App() {
           </div>
 
           <div className="header-right">
-            <button
-              className="glowing-red-white-btn header-btn"
-              onClick={() => setView("landing")}
-              style={{ fontSize: "11px", padding: "6px 14px", marginRight: "8px" }}
-              title="View Cinematic Story"
-            >
-              <span>✦ Story Landing</span>
-            </button>
             <div className="online">
               <span></span>
               Database Connected
