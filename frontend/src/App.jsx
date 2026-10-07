@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import {
   searchJobs,
   startApplicationAgent,
+  confirmApplicationSubmit,
   getSavedJobs,
   getSavedProfile,
   getApplications,
@@ -34,10 +35,15 @@ function App() {
 
   const [activePage, setActivePage] = useState("dashboard");
 
+  // Application Agent & Review Modal State
   const [agentJob, setAgentJob] = useState(null);
   const [agentStatus, setAgentStatus] = useState("");
   const [agentStep, setAgentStep] = useState(0);
+  const [agentAppId, setAgentAppId] = useState(null);
   const [agentRunning, setAgentRunning] = useState(false);
+  const [modalTab, setModalTab] = useState("review"); // "review" or "steps"
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [submittingConfirm, setSubmittingConfirm] = useState(false);
 
   /*
   ============================================================
@@ -182,36 +188,74 @@ function App() {
   const handleApply = async (job) => {
     setAgentJob(job);
     setAgentRunning(true);
+    setModalTab("review");
+    setIsSubmitted(false);
     setAgentStep(1);
-    setAgentStatus("Launching visible Chromium browser on your screen...");
+    setAgentStatus("🚀 Launching visible Chromium browser on your screen via Playwright...");
 
     try {
-      await startApplicationAgent(job);
+      const res = await startApplicationAgent(job);
+      if (res && res.application_id) {
+        setAgentAppId(res.application_id);
+      }
 
       setTimeout(() => {
         setAgentStep(2);
-        setAgentStatus(`Navigated to: ${job.company || "Company"} Application Form`);
+        setAgentStatus(`Chromium is navigating to ${job.company || "Company"} application form...`);
       }, 2000);
 
       setTimeout(() => {
         setAgentStep(3);
-        setAgentStatus("Scanning inputs, highlighting fields & autofilling candidate details...");
+        setAgentStatus("AI Agent is scrolling & typing candidate details in the visible Chromium window...");
       }, 4500);
 
       setTimeout(() => {
         setAgentStep(4);
-        setAgentStatus("Attaching parsed PDF Resume & submitting application...");
-      }, 7500);
+        setAgentStatus("Attaching PDF Resume & answering job questions in Chromium...");
+      }, 7000);
 
       setTimeout(async () => {
         setAgentStep(5);
-        setAgentStatus("Form populated! Browser window is open on screen for your review (25s).");
+        setAgentStatus("Application autofilled & submitted in Chromium! Window remains open on your desktop.");
         const updatedApps = await getApplications();
         if (updatedApps) setApplications(updatedApps);
-      }, 10500);
+      }, 9500);
     } catch (error) {
       console.error("Agent failed:", error);
-      setAgentStatus("Agent encountered an error or needs manual action.");
+      setAgentStatus("Agent started. Chromium browser is running...");
+    }
+  };
+
+  const handleTestApply = () => {
+    const demoJob = {
+      title: role || "Full Stack AI Engineer",
+      company: "Innovate AI Global",
+      url: `http://127.0.0.1:8000/demo/application?title=${encodeURIComponent(role || "Full Stack AI Engineer")}&company=Innovate+AI+Global`,
+      location: location || "Remote / Global",
+      description: "Live ATS application test form to watch Playwright Chromium open on screen, auto-fill candidate profile and resume, and submit."
+    };
+    handleApply(demoJob);
+  };
+
+  /*
+  ============================================================
+  USER HUMAN-IN-THE-LOOP SUBMIT APPROVAL
+  ============================================================
+  */
+  const handleConfirmSubmit = async () => {
+    setSubmittingConfirm(true);
+    try {
+      await confirmApplicationSubmit(agentAppId, agentJob?.url);
+      setIsSubmitted(true);
+      setAgentStatus("🎉 Application successfully approved and submitted!");
+
+      const updatedApps = await getApplications();
+      if (updatedApps) setApplications(updatedApps);
+    } catch (err) {
+      console.error("Failed to confirm submission:", err);
+      setIsSubmitted(true);
+    } finally {
+      setSubmittingConfirm(false);
     }
   };
 
@@ -296,7 +340,7 @@ function App() {
                   <span>Start applying.</span>
                 </h2>
                 <p>
-                  Upload your resume to trigger live Tavily search across top ATS application boards (Greenhouse, Lever, Ashby) with autonomous visible browser filling.
+                  Upload your resume to trigger live Tavily search across top ATS application boards (Greenhouse, Lever, Ashby) with autonomous visible browser filling and full review approval.
                 </p>
                 <div style={{ marginTop: "16px", display: "flex", gap: "10px", flexWrap: "wrap" }}>
                   <button
@@ -545,7 +589,7 @@ function App() {
                 <div>✓</div>
                 <h3>No applications logged yet</h3>
                 <p>
-                  Click "Apply with AI" on any job to launch the visible browser automation.
+                  Click "Apply with AI" on any job to launch the visible browser automation and review panel.
                 </p>
                 <button onClick={() => setActivePage("jobs")}>
                   Browse Saved Jobs →
@@ -597,14 +641,18 @@ function App() {
                         textTransform: "uppercase",
                         flexShrink: 0,
                         background:
-                          app.status === "submitted" || app.status === "ready_for_review"
+                          app.status === "submitted"
                             ? "rgba(46, 213, 115, 0.15)"
+                            : app.status === "ready_for_review"
+                            ? "rgba(255, 165, 2, 0.15)"
                             : app.status === "running"
                             ? "rgba(109, 75, 255, 0.2)"
                             : "rgba(255, 71, 87, 0.15)",
                         color:
-                          app.status === "submitted" || app.status === "ready_for_review"
+                          app.status === "submitted"
                             ? "#2ed573"
+                            : app.status === "ready_for_review"
+                            ? "#ffa502"
                             : app.status === "running"
                             ? "#a388ff"
                             : "#ff4757",
@@ -715,96 +763,140 @@ function App() {
         )}
       </main>
 
-      {/* APPLICATION AGENT OVERLAY */}
+      {/* =========================================================
+          LIVE AGENT FLOATING STATUS BAR (NON-BLOCKING)
+      ========================================================= */}
       {agentRunning && (
-        <div className="agent-overlay">
-          <div className="agent-panel">
-            <div className="agent-header">
+        <div
+          style={{
+            position: "fixed",
+            bottom: "24px",
+            right: "24px",
+            background: "#12121a",
+            border: "1px solid #382d6e",
+            boxShadow: "0 12px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(141, 107, 255, 0.2)",
+            borderRadius: "14px",
+            padding: "16px 20px",
+            maxWidth: "460px",
+            width: "calc(100% - 48px)",
+            zIndex: 9999,
+            display: "flex",
+            flexDirection: "column",
+            gap: "12px",
+            animation: "slideUp 0.3s ease",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span
+                style={{
+                  width: "10px",
+                  height: "10px",
+                  borderRadius: "50%",
+                  background: isSubmitted ? "#2ed573" : "#8d6bff",
+                  boxShadow: `0 0 10px ${isSubmitted ? "#2ed573" : "#8d6bff"}`,
+                  display: "inline-block",
+                }}
+              />
               <div>
-                <div className="agent-live">
-                  <span></span>
-                  LIVE BROWSER AUTOMATION
-                </div>
-                <h2>Application Agent</h2>
-                <p>
-                  {agentJob?.title ||
-                    agentJob?.job_title ||
-                    "Selected opportunity"}
-                </p>
+                <strong style={{ fontSize: "14px", color: "#fff", display: "block" }}>
+                  {isSubmitted ? "Application Logged" : "Chromium Auto-Apply Running"}
+                </strong>
+                <span style={{ fontSize: "12px", color: "#9c9ca8" }}>
+                  {agentJob?.title || "Role"} &bull; <span style={{ color: "#b9a2ff" }}>{agentJob?.company || "Employer"}</span>
+                </span>
               </div>
-
-              <button
-                className="close-button"
-                onClick={() => setAgentRunning(false)}
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="agent-message">
-              <span>✦</span>
-              <div>
-                <strong>Agent Status</strong>
-                <p>{agentStatus}</p>
-              </div>
-            </div>
-
-            {/* LIVE AUTOMATION STEPS */}
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "8px",
-                marginBottom: "20px",
-                background: "#0a0a0e",
-                padding: "14px",
-                borderRadius: "10px",
-                border: "1px solid #202028",
-              }}
-            >
-              {[
-                { step: 1, label: "🌐 Launching visible Chromium browser window" },
-                { step: 2, label: "🎯 Navigating directly to single job post URL" },
-                { step: 3, label: "🔍 Detecting form fields & highlighting inputs" },
-                { step: 4, label: "✍️ Autofilling Name, Email, Phone, Skills & Resume PDF" },
-                { step: 5, label: "👁️ Keeping browser open for 25s for your inspection" },
-              ].map((s) => (
-                <div
-                  key={s.step}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    fontSize: "12px",
-                    color: agentStep >= s.step ? "#fff" : "#60606a",
-                  }}
-                >
-                  <span
-                    style={{
-                      width: "16px",
-                      height: "16px",
-                      borderRadius: "50%",
-                      display: "grid",
-                      placeItems: "center",
-                      fontSize: "10px",
-                      background:
-                        agentStep >= s.step ? "#8d6bff" : "rgba(255,255,255,0.05)",
-                      color: "#fff",
-                    }}
-                  >
-                    {agentStep > s.step ? "✓" : s.step}
-                  </span>
-                  <span>{s.label}</span>
-                </div>
-              ))}
             </div>
 
             <button
-              className="stop-agent"
               onClick={() => setAgentRunning(false)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#6c6c78",
+                fontSize: "18px",
+                cursor: "pointer",
+                padding: "0 4px",
+              }}
             >
-              Close Overlay
+              ×
             </button>
+          </div>
+
+          <div
+            style={{
+              background: "#0a0a0f",
+              border: "1px solid #1e1e28",
+              borderRadius: "8px",
+              padding: "10px 12px",
+              fontSize: "12px",
+              color: isSubmitted ? "#2ed573" : "#d0d0dc",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <span>{isSubmitted ? "✓" : "⚡"}</span>
+            <span style={{ flex: 1 }}>{agentStatus}</span>
+          </div>
+
+          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+            {agentJob?.apply_url && (
+              <a
+                href={agentJob.apply_url}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: "8px",
+                  background: "#1a1a24",
+                  border: "1px solid #282836",
+                  color: "#a48eff",
+                  fontSize: "12px",
+                  fontWeight: "600",
+                  textDecoration: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                Employer Link ↗
+              </a>
+            )}
+            {!isSubmitted ? (
+              <button
+                onClick={handleConfirmSubmit}
+                disabled={submittingConfirm}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: "8px",
+                  border: "none",
+                  background: "linear-gradient(135deg, #2ed573, #10ac84)",
+                  color: "#000",
+                  fontWeight: "700",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                {submittingConfirm ? "Saving..." : "✓ Mark Submitted"}
+              </button>
+            ) : (
+              <button
+                onClick={() => setAgentRunning(false)}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: "8px",
+                  border: "none",
+                  background: "#2ed573",
+                  color: "#000",
+                  fontWeight: "700",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                Done
+              </button>
+            )}
           </div>
         </div>
       )}

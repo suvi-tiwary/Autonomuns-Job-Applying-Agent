@@ -2,7 +2,6 @@ import asyncio
 import os
 import shutil
 import sys
-import tempfile
 from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
@@ -20,6 +19,7 @@ if sys.platform == "win32":
     )
 
 import db
+from models import ApplicationStatus
 from resume_parser import (
     extract_pdf_text,
     structure_resume
@@ -27,11 +27,11 @@ from resume_parser import (
 from job_searcher import search_jobs
 from job_matcher import rank_jobs
 
-# Initialize database tables
+# Initialize database schema
 db.init_db()
 
 app = FastAPI(
-    title="AI Job Agent"
+    title="JobMate AI Agent"
 )
 
 app.add_middleware(
@@ -42,7 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory cache synced with DB
+# In-memory sync with DB
 current_profile, current_resume_path, current_resume_filename = db.get_active_profile()
 current_jobs = db.get_jobs()
 
@@ -50,7 +50,7 @@ current_jobs = db.get_jobs()
 @app.get("/")
 def root():
     return {
-        "status": "AI Job Agent running",
+        "status": "JobMate AI Agent running",
         "database": "SQLite connected",
         "saved_jobs_count": len(db.get_jobs()),
         "has_profile": current_profile is not None
@@ -85,7 +85,6 @@ async def upload_resume(
     current_resume_path = os.path.abspath(file_path)
     current_resume_filename = file.filename
 
-    # Save to SQLite database
     db.save_profile(
         profile_data=profile,
         resume_path=current_resume_path,
@@ -107,7 +106,6 @@ async def find_jobs(request: Request):
     global current_resume_filename
     global current_jobs
 
-    # Check database if not in memory
     if not current_profile:
         current_profile, current_resume_path, current_resume_filename = db.get_active_profile()
 
@@ -117,11 +115,9 @@ async def find_jobs(request: Request):
             detail="Upload a resume first"
         )
 
-    # Optional search parameters
     role = None
     location = None
     try:
-        # Check if form data or json was sent
         content_type = request.headers.get("content-type", "")
         if "application/json" in content_type:
             body = await request.json()
@@ -134,18 +130,18 @@ async def find_jobs(request: Request):
     except Exception:
         pass
 
-    # Create search profile augmented with role/location if provided
     search_profile = dict(current_profile)
     if role and role.strip():
         search_profile["target_role"] = role.strip()
     if location and location.strip():
         search_profile["target_location"] = location.strip()
 
-    jobs = search_jobs(search_profile)
-    ranked_jobs = rank_jobs(jobs, search_profile)
+    # Search & strict verification pipeline
+    verified_jobs = search_jobs(search_profile)
+    ranked_jobs = rank_jobs(verified_jobs, search_profile)
 
-    # Persist to database so they survive refresh and server restarts
-    saved_jobs = db.save_jobs(ranked_jobs)
+    # Persist verified jobs to SQLite database
+    db.save_jobs(ranked_jobs)
     current_jobs = db.get_jobs()
 
     return {
@@ -229,22 +225,25 @@ async def start_apply(
         current_profile, current_resume_path, _ = db.get_active_profile()
 
     job_data = request.job or {}
-    job_url = request.url or job_data.get("url") or job_data.get("link") or job_data.get("job_url")
+    job_url = request.url or job_data.get("apply_url") or job_data.get("job_url") or job_data.get("url") or job_data.get("link")
     job_title = job_data.get("title") or job_data.get("job_title") or "Application"
     company = job_data.get("company") or job_data.get("company_name") or ""
+    job_id = str(job_data.get("id") or "")
 
-    if not job_url:
+    if not job_url or not job_url.startswith("http"):
         raise HTTPException(
             status_code=400,
-            detail="Job URL is required to start application"
+            detail="Valid HTTP job URL is required to start application"
         )
 
-    # Record application in DB
+    # Record application session in DB
     app_id = db.save_application(
         job_url=job_url,
+        apply_url=job_url,
         job_title=job_title,
         company=company,
-        status="running",
+        job_id=job_id,
+        status=ApplicationStatus.APPLY_STARTED.value,
         result=None
     )
 
@@ -258,7 +257,7 @@ async def start_apply(
         asyncio.set_event_loop(loop)
         try:
             from application_agent import apply_to_job
-            print(f"\n[Backend] Launching visible browser auto-apply for: {target_url}")
+            print(f"\n[Backend] Launching visible browser auto-apply on REAL employer page: {target_url}")
             result = loop.run_until_complete(
                 apply_to_job(
                     job_url=target_url,
@@ -267,12 +266,19 @@ async def start_apply(
                     interactive=False
                 )
             )
-            print(f"[Backend] Auto-apply finished with result: {result}")
-            status = "submitted" if (result.get("submitted") or result.get("status") == "completed") else "ready_for_review"
-            db.update_application(application_id, status=status, result=result)
+            print(f"[Backend] Real employer auto-apply paused with result: {result}")
+            db.update_application(
+                application_id,
+                status=result.get("status", ApplicationStatus.READY_FOR_REVIEW.value),
+                result=result
+            )
         except Exception as err:
-            print("[Backend] Auto-apply background error:", err)
-            db.update_application(application_id, status="failed", result={"error": str(err)})
+            print("[Backend] Auto-apply error:", err)
+            db.update_application(
+                application_id,
+                status=ApplicationStatus.FAILED.value,
+                result={"error": str(err)}
+            )
         finally:
             loop.close()
 
@@ -280,9 +286,10 @@ async def start_apply(
 
     return {
         "success": True,
-        "message": f"Application agent started for {job_url}",
+        "message": f"Real employer application agent started for {job_url}",
         "job_url": job_url,
-        "application_id": app_id
+        "application_id": app_id,
+        "status": ApplicationStatus.APPLY_STARTED.value
     }
 
 
@@ -296,13 +303,11 @@ async def confirm_submit(request: ConfirmSubmitRequest):
     if request.application_id:
         db.update_application(
             request.application_id,
-            status="submitted",
-            result={"success": True, "confirmed_by_user": True}
+            status=ApplicationStatus.SUBMITTED.value,
+            result={"success": True, "manually_submitted_by_applicant": True}
         )
     return {
         "success": True,
-        "status": "submitted",
-        "message": "Application confirmed and successfully recorded as submitted!"
+        "status": ApplicationStatus.SUBMITTED.value,
+        "message": "Application confirmed and successfully recorded as submitted on employer site!"
     }
-
-

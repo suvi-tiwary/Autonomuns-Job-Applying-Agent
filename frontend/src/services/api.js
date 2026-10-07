@@ -94,3 +94,17 @@ export const startApplicationAgent = async (job) => {
   
   return await response.json();
 };
+
+export const confirmApplicationSubmit = async (applicationId, jobUrl) => {
+  const response = await fetch(`${API_BASE}/api/apply/submit-confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ application_id: applicationId, job_url: jobUrl }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Confirmation failed: ${response.status}`);
+  }
+
+  return await response.json();
+};
