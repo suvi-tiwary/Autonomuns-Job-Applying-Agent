@@ -25,6 +25,46 @@ export const getSavedProfile = async () => {
   }
 };
 
+export const saveCandidateProfile = async (profileData) => {
+  const response = await fetch(`${API_BASE}/api/profile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profileData),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Profile save failed: ${response.status}`);
+  }
+
+  return await response.json();
+};
+
+export const getAgentSettings = async () => {
+  try {
+    const response = await fetch(`${API_BASE}/api/settings`);
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.settings;
+  } catch (error) {
+    console.warn("Could not fetch agent settings:", error);
+    return null;
+  }
+};
+
+export const saveAgentSettings = async (settings) => {
+  const response = await fetch(`${API_BASE}/api/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Settings save failed: ${response.status}`);
+  }
+
+  return await response.json();
+};
+
 export const getApplications = async () => {
   try {
     const response = await fetch(`${API_BASE}/api/applications`);
@@ -33,6 +73,18 @@ export const getApplications = async () => {
     return data.applications || [];
   } catch (error) {
     console.warn("Could not fetch applications:", error);
+    return [];
+  }
+};
+
+export const getApplicationFields = async (appId) => {
+  try {
+    const response = await fetch(`${API_BASE}/api/applications/${appId}/fields`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.fields || [];
+  } catch (error) {
+    console.warn(`Could not fetch fields for application ${appId}:`, error);
     return [];
   }
 };
@@ -81,11 +133,11 @@ export const searchJobs = async (resumeFile, role, location) => {
   return Array.isArray(data) ? data : data.jobs || data.results || [];
 };
 
-export const startApplicationAgent = async (job) => {
+export const startApplicationAgent = async (job, settings = null) => {
   const response = await fetch(`${API_BASE}/api/apply`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ job }),
+    body: JSON.stringify({ job, settings }),
   });
 
   if (!response.ok) {

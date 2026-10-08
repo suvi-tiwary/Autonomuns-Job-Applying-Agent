@@ -13,6 +13,9 @@ import {
 import JobCard from "./components/JobCard";
 import PlacementCalendar from "./components/PlacementCalendar";
 import Hero from "./components/Hero";
+import CandidateProfileView from "./components/CandidateProfileView";
+import AgentSettingsBar from "./components/AgentSettingsBar";
+import ApplicationDetailModal from "./components/ApplicationDetailModal";
 import "./index.css";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -21,6 +24,7 @@ function App() {
   const [view, setView] = useState("landing"); // "landing" or "dashboard"
   const [resume, setResume] = useState(null);
   const [resumeName, setResumeName] = useState("");
+  const [resumePath, setResumePath] = useState("");
   const [profileData, setProfileData] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [applications, setApplications] = useState([]);
@@ -43,9 +47,11 @@ function App() {
   const [agentStep, setAgentStep] = useState(0);
   const [agentAppId, setAgentAppId] = useState(null);
   const [agentRunning, setAgentRunning] = useState(false);
-  const [modalTab, setModalTab] = useState("review"); // "review" or "steps"
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [submittingConfirm, setSubmittingConfirm] = useState(false);
+
+  // Application Fields Debug Modal
+  const [selectedAppForDetail, setSelectedAppForDetail] = useState(null);
 
   /*
   ============================================================
@@ -59,7 +65,8 @@ function App() {
         if (profileRes && profileRes.profile) {
           setProfileData(profileRes.profile);
           setResumeUploaded(true);
-          setResumeName(profileRes.resume_filename || "Saved Resume (Database)");
+          setResumeName(profileRes.resume_filename || "Saved Candidate Profile (Database)");
+          setResumePath(profileRes.resume_path || "");
         }
 
         const savedJobs = await getSavedJobs();
@@ -83,7 +90,7 @@ function App() {
 
   /*
   ============================================================
-  RESUME UPLOAD (Persisted in SQLite DB)
+  RESUME UPLOAD (Persisted in SQLite DB & Extracted)
   ============================================================
   */
   const handleResume = async (e) => {
@@ -129,6 +136,9 @@ function App() {
       if (data.profile) {
         setProfileData(data.profile);
       }
+      if (data.resume_path) {
+        setResumePath(data.resume_path);
+      }
     } catch (error) {
       console.error("Resume upload failed:", error);
       setResumeUploaded(false);
@@ -144,8 +154,8 @@ function App() {
   ============================================================
   */
   const handleSearch = async () => {
-    if (!resumeUploaded && !resume) {
-      setSearchError("Please upload your resume before searching.");
+    if (!resumeUploaded && !resume && !profileData) {
+      setSearchError("Please upload your resume or configure profile before searching.");
       return;
     }
 
@@ -190,7 +200,6 @@ function App() {
   const handleApply = async (job) => {
     setAgentJob(job);
     setAgentRunning(true);
-    setModalTab("review");
     setIsSubmitted(false);
     setAgentStep(1);
     setAgentStatus("🚀 Launching visible Chromium browser on your screen via Playwright...");
@@ -208,35 +217,24 @@ function App() {
 
       setTimeout(() => {
         setAgentStep(3);
-        setAgentStatus("AI Agent is scrolling & typing candidate details in the visible Chromium window...");
+        setAgentStatus("AI Agent is inspecting DOM & autofilling Candidate Profile fields...");
       }, 4500);
 
       setTimeout(() => {
         setAgentStep(4);
-        setAgentStatus("Attaching PDF Resume & answering job questions in Chromium...");
+        setAgentStatus("Intelligent LLM Agent answering role questions & attaching resume...");
       }, 7000);
 
       setTimeout(async () => {
         setAgentStep(5);
-        setAgentStatus("Application autofilled & submitted in Chromium! Window remains open on your desktop.");
+        setAgentStatus("Application populated! Paused at READY_FOR_REVIEW for your submission.");
         const updatedApps = await getApplications();
         if (updatedApps) setApplications(updatedApps);
       }, 9500);
     } catch (error) {
       console.error("Agent failed:", error);
-      setAgentStatus("Agent started. Chromium browser is running...");
+      setAgentStatus("Agent started. Visible Chromium browser is running...");
     }
-  };
-
-  const handleTestApply = () => {
-    const demoJob = {
-      title: role || "Full Stack AI Engineer",
-      company: "Innovate AI Global",
-      url: `http://127.0.0.1:8000/demo/application?title=${encodeURIComponent(role || "Full Stack AI Engineer")}&company=Innovate+AI+Global`,
-      location: location || "Remote / Global",
-      description: "Live ATS application test form to watch Playwright Chromium open on screen, auto-fill candidate profile and resume, and submit."
-    };
-    handleApply(demoJob);
   };
 
   /*
@@ -247,9 +245,9 @@ function App() {
   const handleConfirmSubmit = async () => {
     setSubmittingConfirm(true);
     try {
-      await confirmApplicationSubmit(agentAppId, agentJob?.url);
+      await confirmApplicationSubmit(agentAppId, agentJob?.url || agentJob?.job_url);
       setIsSubmitted(true);
-      setAgentStatus("🎉 Application successfully approved and submitted!");
+      setAgentStatus("🎉 Application confirmed and recorded in database!");
 
       const updatedApps = await getApplications();
       if (updatedApps) setApplications(updatedApps);
@@ -273,7 +271,7 @@ function App() {
           <div className="brand-icon">✦</div>
           <div>
             <h2>JobMate</h2>
-            <span>AI Career Agent</span>
+            <span>Autonomous AI Agent</span>
           </div>
         </div>
 
@@ -291,7 +289,7 @@ function App() {
               icon: "✓",
               label: `Applications (${applications.length})`,
             },
-            { id: "resume", icon: "▣", label: "Profile / Resume" },
+            { id: "resume", icon: "▣", label: "Candidate Profile" },
           ].map((item) => (
             <button
               key={item.id}
@@ -323,7 +321,7 @@ function App() {
           <div className="status-dot"></div>
           <div>
             <strong>SQLite Synced</strong>
-            <small>{jobs.length} jobs in DB</small>
+            <small>{jobs.length} jobs &bull; {applications.length} apps</small>
           </div>
         </div>
       </aside>
@@ -332,7 +330,7 @@ function App() {
       <main className="main">
         <header className="header">
           <div>
-            <p className="eyebrow">AI JOB SEARCH & AUTO-APPLY AGENT</p>
+            <p className="eyebrow">AUTONOMOUS CANDIDATE PROFILE & AUTO-APPLY AGENT</p>
             <h1>
               Find your next
               <span> opportunity.</span>
@@ -347,25 +345,28 @@ function App() {
           </div>
         </header>
 
+        {/* Global Agent Safety Controls Bar */}
+        <AgentSettingsBar />
+
         {/* DASHBOARD */}
         {activePage === "dashboard" && (
           <>
             <section className="hero">
               <div className="hero-content">
                 <div className="hero-badge">
-                  ✦ Real-Time Tavily Job Matching + Visible Auto-Apply
+                  ✦ Persistent Candidate Profile + Intelligent LLM Question Agent
                 </div>
                 <h2>
-                  Stop searching.
+                  Configure once.
                   <br />
-                  <span>Start applying.</span>
+                  <span>Apply anywhere.</span>
                 </h2>
                 <p>
-                  Upload your resume to trigger live Tavily search across top ATS application boards (Greenhouse, Lever, Ashby) with autonomous visible browser filling and full review approval.
+                  Upload your resume to automatically generate your persistent Candidate Profile. The LLM Question Agent intelligently answers company questions, explains your projects, and validates word limits in visible Playwright Chromium.
                 </p>
                 <div style={{ marginTop: "16px", display: "flex", gap: "10px", flexWrap: "wrap" }}>
                   <button
-                    onClick={() => setActivePage("placement")}
+                    onClick={() => setActivePage("resume")}
                     style={{
                       padding: "10px 18px",
                       borderRadius: "10px",
@@ -380,7 +381,26 @@ function App() {
                       gap: "6px",
                     }}
                   >
-                    <span>🎯</span> Open Placement Radar (80+ Verified Targets)
+                    <span>▣</span> View / Edit Candidate Profile
+                  </button>
+
+                  <button
+                    onClick={() => setActivePage("placement")}
+                    style={{
+                      padding: "10px 18px",
+                      borderRadius: "10px",
+                      background: "rgba(255, 255, 255, 0.06)",
+                      border: "1px solid rgba(255, 255, 255, 0.15)",
+                      color: "#e5e7eb",
+                      fontWeight: "600",
+                      fontSize: "13px",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <span>🎯</span> Open Placement Radar
                   </button>
                 </div>
               </div>
@@ -407,7 +427,7 @@ function App() {
                     <input
                       value={role}
                       onChange={(e) => setRole(e.target.value)}
-                      placeholder="AI/ML Engineer, Fullstack, C++ SWE..."
+                      placeholder="AI/ML Engineer, Fullstack, Python SWE..."
                     />
                   </div>
                 </div>
@@ -425,7 +445,7 @@ function App() {
                 </div>
               </div>
 
-              {/* RESUME */}
+              {/* RESUME UPLOAD */}
               <div className="resume-upload">
                 <input
                   type="file"
@@ -439,29 +459,31 @@ function App() {
                   <div className="upload-icon">↑</div>
 
                   <div>
-                    {resumeName || resume ? (
+                    {resumeName || resume || profileData?.personal?.full_name ? (
                       <>
-                        <strong>{resumeName || resume?.name}</strong>
+                        <strong>
+                          {resumeName || resume?.name || (profileData?.personal?.full_name ? `${profileData.personal.full_name}'s Profile` : "Saved Resume")}
+                        </strong>
                         <small>
                           {uploadingResume
-                            ? "Uploading & parsing resume to database..."
-                            : resumeUploaded
-                            ? "Resume saved in database & ready for live Tavily matching"
+                            ? "Uploading & extracting structured profile to database..."
+                            : resumeUploaded || profileData
+                            ? "Candidate Profile synced in database & ready for application filling"
                             : "Resume selected"}
                         </small>
                       </>
                     ) : (
                       <>
                         <strong>Upload your resume</strong>
-                        <small>PDF • Stored in DB for instant matching</small>
+                        <small>PDF • Automatically populates your persistent Candidate Profile</small>
                       </>
                     )}
                   </div>
 
                   <span className="upload-action">
                     {uploadingResume
-                      ? "Uploading..."
-                      : resumeUploaded
+                      ? "Extracting..."
+                      : resumeUploaded || profileData
                       ? "Replace"
                       : "Browse"}
                   </span>
@@ -479,7 +501,7 @@ function App() {
                   {uploadingResume ? (
                     <>
                       <span className="spinner"></span>
-                      Uploading resume...
+                      Extracting resume profile...
                     </>
                   ) : loading ? (
                     <>
@@ -512,6 +534,49 @@ function App() {
                 <div className="error-box">⚠ {searchError}</div>
               )}
             </section>
+
+            {/* DIRECT MATCHING JOBS SECTION ON DASHBOARD */}
+            {jobs.length > 0 && (
+              <section className="page-section" style={{ marginTop: "28px" }}>
+                <div className="page-title">
+                  <div>
+                    <p className="eyebrow">TAVILY VERIFIED ATS OPPORTUNITIES</p>
+                    <h2>Direct Matching Job Postings ({jobs.length})</h2>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                    <span className="job-count">
+                      {jobs.length} Verified Direct Posts
+                    </span>
+                    <button
+                      onClick={handleClearJobs}
+                      disabled={clearingJobs}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid rgba(255, 80, 80, 0.3)",
+                        color: "#ff6b6b",
+                        borderRadius: "8px",
+                        padding: "6px 14px",
+                        fontSize: "13px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {clearingJobs ? "Clearing..." : "Clear"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="jobs-list">
+                  {jobs.map((job, index) => (
+                    <JobCard
+                      key={job.id || job.job_url || job.url || index}
+                      job={job}
+                      onApply={() => handleApply(job)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
           </>
         )}
 
@@ -592,12 +657,12 @@ function App() {
           </section>
         )}
 
-        {/* APPLICATIONS */}
+        {/* APPLICATIONS HISTORY WITH DEBUG FIELD TRACE */}
         {activePage === "applications" && (
           <section className="page-section">
             <div className="page-title">
               <div>
-                <p className="eyebrow">APPLICATION RUN LOG</p>
+                <p className="eyebrow">AUTOMATED APPLICATION SESSIONS</p>
                 <h2>Applications History</h2>
               </div>
               <span className="job-count">
@@ -610,7 +675,7 @@ function App() {
                 <div>✓</div>
                 <h3>No applications logged yet</h3>
                 <p>
-                  Click "Apply with AI" on any job to launch the visible browser automation and review panel.
+                  Click "Apply with AI" on any job to launch visible Playwright automation and LLM question answering.
                 </p>
                 <button onClick={() => setActivePage("jobs")}>
                   Browse Saved Jobs →
@@ -653,34 +718,54 @@ function App() {
                       </div>
                     </div>
 
-                    <span
-                      style={{
-                        padding: "4px 12px",
-                        borderRadius: "20px",
-                        fontSize: "12px",
-                        fontWeight: "600",
-                        textTransform: "uppercase",
-                        flexShrink: 0,
-                        background:
-                          app.status === "submitted"
-                            ? "rgba(46, 213, 115, 0.15)"
-                            : app.status === "ready_for_review"
-                            ? "rgba(255, 165, 2, 0.15)"
-                            : app.status === "running"
-                            ? "rgba(109, 75, 255, 0.2)"
-                            : "rgba(255, 71, 87, 0.15)",
-                        color:
-                          app.status === "submitted"
-                            ? "#2ed573"
-                            : app.status === "ready_for_review"
-                            ? "#ffa502"
-                            : app.status === "running"
-                            ? "#a388ff"
-                            : "#ff4757",
-                      }}
-                    >
-                      {app.status === "ready_for_review" ? "Reviewed & Filled" : app.status}
-                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <button
+                        onClick={() => setSelectedAppForDetail(app)}
+                        style={{
+                          background: "rgba(141, 107, 255, 0.12)",
+                          border: "1px solid rgba(141, 107, 255, 0.3)",
+                          color: "#c7d2fe",
+                          borderRadius: "8px",
+                          padding: "6px 12px",
+                          fontSize: "12px",
+                          fontWeight: "600",
+                          cursor: "pointer",
+                        }}
+                      >
+                        🔍 Inspect Fields
+                      </button>
+
+                      <span
+                        style={{
+                          padding: "4px 12px",
+                          borderRadius: "20px",
+                          fontSize: "12px",
+                          fontWeight: "600",
+                          textTransform: "uppercase",
+                          flexShrink: 0,
+                          background:
+                            app.status === "SUBMITTED" || app.status === "submitted"
+                              ? "rgba(46, 213, 115, 0.15)"
+                              : app.status === "READY_FOR_REVIEW" || app.status === "ready_for_review"
+                              ? "rgba(255, 165, 2, 0.15)"
+                              : app.status === "APPLY_STARTED" || app.status === "running"
+                              ? "rgba(109, 75, 255, 0.2)"
+                              : "rgba(255, 71, 87, 0.15)",
+                          color:
+                            app.status === "SUBMITTED" || app.status === "submitted"
+                              ? "#2ed573"
+                              : app.status === "READY_FOR_REVIEW" || app.status === "ready_for_review"
+                              ? "#ffa502"
+                              : app.status === "APPLY_STARTED" || app.status === "running"
+                              ? "#a388ff"
+                              : "#ff4757",
+                        }}
+                      >
+                        {app.status === "READY_FOR_REVIEW" || app.status === "ready_for_review"
+                          ? "Reviewed & Filled"
+                          : app.status}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -688,101 +773,30 @@ function App() {
           </section>
         )}
 
-        {/* RESUME & PROFILE */}
+        {/* PERSISTENT DYNAMIC CANDIDATE PROFILE */}
         {activePage === "resume" && (
           <section className="page-section">
-            <div className="page-title">
-              <div>
-                <p className="eyebrow">DATABASE PROFILE</p>
-                <h2>Candidate Profile</h2>
-              </div>
-            </div>
-
-            <div className="resume-page-card">
-              <div className="big-file-icon">PDF</div>
-
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h3>{resumeName || "No resume uploaded"}</h3>
-                <p>
-                  {resumeUploaded
-                    ? "Stored permanently in SQLite database. AI uses your skills to match direct ATS vacancies and autofill forms."
-                    : "Upload a PDF resume from the dashboard to populate your AI candidate profile."}
-                </p>
-
-                {profileData && (
-                  <div style={{ marginTop: "16px" }}>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-                        gap: "12px",
-                        marginBottom: "16px",
-                        background: "rgba(255, 255, 255, 0.03)",
-                        padding: "14px",
-                        borderRadius: "10px",
-                      }}
-                    >
-                      {profileData.name && (
-                        <div>
-                          <small style={{ color: "#777780", display: "block" }}>Name</small>
-                          <strong style={{ color: "#fff" }}>{profileData.name}</strong>
-                        </div>
-                      )}
-                      {profileData.email && (
-                        <div>
-                          <small style={{ color: "#777780", display: "block" }}>Email</small>
-                          <strong style={{ color: "#fff" }}>{profileData.email}</strong>
-                        </div>
-                      )}
-                      {profileData.phone && (
-                        <div>
-                          <small style={{ color: "#777780", display: "block" }}>Phone</small>
-                          <strong style={{ color: "#fff" }}>{profileData.phone}</strong>
-                        </div>
-                      )}
-                      {profileData.location && (
-                        <div>
-                          <small style={{ color: "#777780", display: "block" }}>Location</small>
-                          <strong style={{ color: "#fff" }}>{profileData.location}</strong>
-                        </div>
-                      )}
-                    </div>
-
-                    {profileData.skills && profileData.skills.length > 0 && (
-                      <div>
-                        <small style={{ color: "#777780", display: "block", marginBottom: "8px" }}>
-                          Extracted Skills ({profileData.skills.length})
-                        </small>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                          {profileData.skills.map((skill, idx) => (
-                            <span
-                              key={idx}
-                              style={{
-                                background: "rgba(109, 75, 255, 0.15)",
-                                border: "1px solid rgba(109, 75, 255, 0.3)",
-                                color: "#b9a2ff",
-                                padding: "4px 10px",
-                                borderRadius: "6px",
-                                fontSize: "12px",
-                              }}
-                            >
-                              {skill}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <button onClick={() => setActivePage("dashboard")}>
-                {resumeUploaded ? "Upload New Resume" : "Upload resume"}
-              </button>
-            </div>
+            <CandidateProfileView
+              initialProfile={profileData}
+              resumeName={resumeName}
+              resumePath={resumePath}
+              onProfileUpdated={(updated) => setProfileData(updated)}
+              onUploadNewResume={() => {
+                const el = document.getElementById("resume");
+                if (el) el.click();
+              }}
+            />
           </section>
         )}
       </main>
+
+      {/* Field Inspection Detail Modal */}
+      {selectedAppForDetail && (
+        <ApplicationDetailModal
+          application={selectedAppForDetail}
+          onClose={() => setSelectedAppForDetail(null)}
+        />
+      )}
 
       {/* =========================================================
           LIVE AGENT FLOATING STATUS BAR (NON-BLOCKING)
@@ -821,7 +835,7 @@ function App() {
               />
               <div>
                 <strong style={{ fontSize: "14px", color: "#fff", display: "block" }}>
-                  {isSubmitted ? "Application Logged" : "Chromium Auto-Apply Running"}
+                  {isSubmitted ? "Application Logged" : "Visible Playwright Auto-Apply"}
                 </strong>
                 <span style={{ fontSize: "12px", color: "#9c9ca8" }}>
                   {agentJob?.title || "Role"} &bull; <span style={{ color: "#b9a2ff" }}>{agentJob?.company || "Employer"}</span>
@@ -862,9 +876,9 @@ function App() {
           </div>
 
           <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-            {agentJob?.apply_url && (
+            {(agentJob?.apply_url || agentJob?.job_url || agentJob?.url) && (
               <a
-                href={agentJob.apply_url}
+                href={agentJob.apply_url || agentJob.job_url || agentJob.url}
                 target="_blank"
                 rel="noreferrer"
                 style={{

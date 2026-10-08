@@ -243,17 +243,20 @@ def verify_and_extract_job(
         desc = ""
         desc_el = (
             soup.find(id="content") or
-            soup.find(class_=re.compile(r"description|content|job-details|posting-page", re.IGNORECASE)) or
+            soup.find(class_=re.compile(r"description|content|job-details|posting-page|section-page|posting-description", re.IGNORECASE)) or
             soup.find("main") or
             soup.find("article") or
             soup.find("body")
         )
         if desc_el:
             desc = desc_el.get_text(" ", strip=True)
-            # Remove excessive whitespace
-            desc = re.sub(r"\s+", " ", desc)
+        else:
+            desc = soup.get_text(" ", strip=True)
 
-        if len(desc) < 40:
+        # Remove excessive whitespace
+        desc = re.sub(r"\s+", " ", desc)
+
+        if len(desc) < 20:
             print(f"[JobVerifier] Insufficient description ({len(desc)} chars) for {final_url} -> Rejected")
             return None
 

@@ -115,13 +115,13 @@ async def detect_captcha(page) -> bool:
 
 
 # =========================================================
-# DOM FIELD EXTRACTION (SINGLE IN-BROWSER JS EVALUATION)
+# ENHANCED DOM FIELD EXTRACTION (SINGLE IN-BROWSER JS EVALUATION)
 # =========================================================
 
 async def get_application_fields(page):
     """
     Extracts all interactive form fields (inputs, textareas, selects)
-    from the REAL employer's web application DOM in a single evaluation.
+    with full label, surrounding instructions, and limit metadata.
     """
     try:
         fields = await page.evaluate("""
@@ -151,14 +151,34 @@ async def get_application_fields(page):
                     const ariaLabel = el.getAttribute('aria-label');
                     if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim();
                     
-                    // Preceding sibling label or span
+                    // Preceding sibling label or span or div
                     let prev = el.previousElementSibling;
                     while (prev) {
-                        if (prev.tagName.toLowerCase() === 'label' || prev.classList.contains('label') || prev.classList.contains('field-label')) {
-                            return prev.innerText.trim();
+                        const tag = prev.tagName.toLowerCase();
+                        if (tag === 'label' || prev.classList.contains('label') || prev.classList.contains('field-label') || tag === 'h4' || tag === 'p') {
+                            const text = prev.innerText.trim();
+                            if (text) return text;
                         }
                         prev = prev.previousElementSibling;
                     }
+
+                    // Parent fieldset legend
+                    const fieldset = el.closest('fieldset');
+                    if (fieldset) {
+                        const legend = fieldset.querySelector('legend');
+                        if (legend && legend.innerText.trim()) return legend.innerText.trim();
+                    }
+
+                    return '';
+                };
+
+                const getSurroundingText = (el) => {
+                    try {
+                        const container = el.closest('.form-group, .field, .input-group, .form-row, .application-question, [data-qa*="question"], div');
+                        if (container) {
+                            return container.innerText.substring(0, 400).trim();
+                        }
+                    } catch (_) {}
                     return '';
                 };
 
@@ -171,7 +191,7 @@ async def get_application_fields(page):
                     const tag = el.tagName.toLowerCase();
                     const rawType = (el.getAttribute('type') || '').toLowerCase();
 
-                    // Skip hidden, submit, button, image types
+                    // Skip hidden, submit, button, image, reset types
                     if (rawType === 'hidden' || rawType === 'submit' || rawType === 'button' || rawType === 'image' || rawType === 'reset') {
                         continue;
                     }
@@ -199,6 +219,9 @@ async def get_application_fields(page):
                     const placeholder = el.getAttribute('placeholder') || '';
                     const ariaLabel = el.getAttribute('aria-label') || '';
                     const autocomplete = el.getAttribute('autocomplete') || '';
+                    const maxlength = el.getAttribute('maxlength') || '';
+                    const minlength = el.getAttribute('minlength') || '';
+                    const surroundingText = getSurroundingText(el);
                     const isRequired = el.hasAttribute('required') || 
                                        el.getAttribute('aria-required') === 'true' || 
                                        label.includes('*');
@@ -220,10 +243,13 @@ async def get_application_fields(page):
                         type: elementType,
                         id: id,
                         name: name,
-                        label: label.substring(0, 300),
+                        label: label.substring(0, 400),
                         placeholder: placeholder,
                         aria_label: ariaLabel,
                         autocomplete: autocomplete,
+                        maxlength: maxlength,
+                        minlength: minlength,
+                        surrounding_text: surroundingText,
                         required: Boolean(isRequired),
                         value: value,
                         options: options
@@ -301,7 +327,7 @@ async def fill_field(page, index: int, value: str):
                     return true;
                 }
 
-                // Smooth scroll & purple glow on real input
+                // Smooth scroll & visual focus glow on real input
                 try {
                     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     el.style.outline = '3px solid #8d6bff';
@@ -333,7 +359,7 @@ async def fill_field(page, index: int, value: str):
             if await loc.count() > 0:
                 await loc.fill(val_str)
         
-        await page.wait_for_timeout(350)
+        await page.wait_for_timeout(300)
     except Exception as e:
         print(f"Warning: could not fill field {index}: {e}")
 

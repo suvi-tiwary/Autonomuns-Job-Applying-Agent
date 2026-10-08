@@ -1,136 +1,173 @@
 import json
 import os
+from typing import Dict, Any
 from pypdf import PdfReader
-import urllib.request
-import urllib.error
 from dotenv import load_dotenv
+from llm_provider import get_llm_provider
 
 load_dotenv()
 
-GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
-GROQ_MODEL = (os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b").strip()
+
+def extract_pdf_text(pdf_path: str) -> str:
+    """Extracts raw plain text from a PDF resume."""
+    if not pdf_path or not os.path.isfile(pdf_path):
+        return ""
+
+    try:
+        reader = PdfReader(pdf_path)
+        text = ""
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            text += page_text + "\n"
+        return text.strip()
+    except Exception as e:
+        print(f"[ResumeParser] PDF text extraction error: {e}")
+        return ""
 
 
-def extract_pdf_text(pdf_path):
-    reader = PdfReader(pdf_path)
-
-    text = ""
-
-    for page in reader.pages:
-        page_text = page.extract_text() or ""
-        text += page_text + "\n"
-
-    return text
-
-
-def structure_resume(resume_text):
-
-    if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY is not set")
+def structure_resume(resume_text: str) -> Dict[str, Any]:
+    """
+    Extracts structured candidate information from resume text
+    matching the expanded dynamic CandidateProfile schema.
+    """
+    if not resume_text or len(resume_text.strip()) < 20:
+        return {}
 
     prompt = f"""
-Extract structured candidate information from this resume.
-
-Return ONLY valid JSON.
+Extract comprehensive candidate profile information from this resume into valid JSON.
 
 Schema:
-
 {{
     "name": "",
     "email": "",
     "phone": "",
     "location": "",
+    "city": "",
+    "state": "",
+    "country": "",
+    "postal_code": "",
     "linkedin": "",
     "github": "",
     "portfolio": "",
-    "education": [],
-    "experience": [],
-    "projects": [],
+    "twitter": "",
+    "college_name": "",
+    "degree": "",
+    "branch_specialization": "",
+    "graduation_year": "",
+    "current_semester": "",
+    "gpa_percentage": "",
+    "education": [
+        {{
+            "institution": "",
+            "degree": "",
+            "branch": "",
+            "graduation_year": "",
+            "current_semester": "",
+            "gpa": ""
+        }}
+    ],
     "skills": [],
-    "certifications": [],
+    "years_of_experience": 0,
+    "summary": "",
+    "projects": [
+        {{
+            "name": "",
+            "description": "",
+            "technologies": [],
+            "role": "",
+            "url": ""
+        }}
+    ],
+    "experience": [
+        {{
+            "company": "",
+            "role": "",
+            "duration": "",
+            "start_date": "",
+            "end_date": "",
+            "location": "",
+            "description": ""
+        }}
+    ],
     "achievements": [],
-    "years_of_experience": 0
+    "certifications": [],
+    "target_role": "",
+    "target_location": "",
+    "work_authorization": "Authorized to work without sponsorship"
 }}
 
 Rules:
+- Do NOT invent or fabricate any information.
+- If information is absent, use empty string or [].
+- Extract projects with distinct technologies and concise descriptions.
+- Extract skills accurately into a list of strings.
+- Extract education with college name, degree, and specialization.
 
-- Do not invent information.
-- If information does not exist, use empty string or [].
-- Extract projects with their technologies and descriptions.
-- Extract technical skills separately.
-- Extract education accurately.
-- Extract experience accurately.
-
-RESUME:
-
-{resume_text}
+RESUME TEXT:
+{resume_text[:14000]}
 """
 
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You extract structured information from resumes."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "temperature": 0,
-        "response_format": {
-            "type": "json_object"
-        }
-    }
+    llm = get_llm_provider()
+    
+    try:
+        content = llm.generate(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You extract structured information from candidate resumes. Return ONLY valid JSON."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.0,
+            max_tokens=1500,
+            response_format="json_object"
+        )
+    except Exception as e:
+        print(f"[ResumeParser] LLM extraction error: {e}")
+        # Fallback simple regex extraction
+        return _fallback_regex_extraction(resume_text)
 
-    request = urllib.request.Request(
-        "https://api.groq.com/openai/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AIJobAgent/1.0"
-        },
-        method="POST"
-    )
+    # Clean code fences
+    cleaned = content.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
 
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            result = json.loads(
-                response.read().decode("utf-8")
-            )
+        return json.loads(cleaned.strip())
+    except Exception as parse_err:
+        print(f"[ResumeParser] JSON parse error: {parse_err}")
+        return _fallback_regex_extraction(resume_text)
 
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8")
 
-        print("====================================")
-        print("GROQ API ERROR")
-        print("STATUS:", e.code)
-        print("DETAIL:", error_body)
-        print("====================================")
+def _fallback_regex_extraction(text: str) -> Dict[str, Any]:
+    """Basic fallback parser when LLM is unavailable."""
+    import re
+    result: Dict[str, Any] = {
+        "name": "",
+        "email": "",
+        "phone": "",
+        "skills": [],
+        "projects": [],
+        "experience": []
+    }
 
-        raise RuntimeError(
-            f"Groq API error {e.code}: {error_body}"
-        )
+    email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
+    if email_match:
+        result["email"] = email_match.group(0)
 
-    except urllib.error.URLError as e:
-        print("====================================")
-        print("GROQ CONNECTION ERROR")
-        print("DETAIL:", e.reason)
-        print("====================================")
+    phone_match = re.search(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", text)
+    if phone_match:
+        result["phone"] = phone_match.group(0)
 
-        raise RuntimeError(
-            f"Could not connect to Groq: {e.reason}"
-        )
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if lines:
+        result["name"] = lines[0][:50]
 
-    content = result["choices"][0]["message"]["content"].strip()
-
-    if content.startswith("```json"):
-        content = content[7:]
-    elif content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
-
-    return json.loads(content.strip())
+    return result

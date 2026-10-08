@@ -2,9 +2,10 @@ import os
 import json
 import sqlite3
 import hashlib
+import re
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
-from models import JobSchema, ApplicationStatus
+from models import JobSchema, ApplicationStatus, AgentSettings
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jobmate.db")
 
@@ -16,11 +17,17 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
+def normalize_question_text(text: str) -> str:
+    """Removes punctuation and extra spaces for fuzzy cached lookup."""
+    clean = re.sub(r"[^\w\s]", "", (text or "").lower())
+    return " ".join(clean.split())
+
+
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Profiles table
+    # Profiles table (expanded)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,6 +93,7 @@ def init_db():
             apply_url TEXT,
             status TEXT,
             result_json TEXT,
+            settings_json TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -103,6 +111,59 @@ def init_db():
             cursor.execute("ALTER TABLE applications ADD COLUMN job_id TEXT")
         except Exception:
             pass
+    if "settings_json" not in app_cols:
+        try:
+            cursor.execute("ALTER TABLE applications ADD COLUMN settings_json TEXT")
+        except Exception:
+            pass
+
+    # Application Fields table (Field fill & question debug history per application)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS application_fields (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id INTEGER,
+            field_name TEXT,
+            question TEXT,
+            detected_type TEXT,
+            source TEXT DEFAULT 'PROFILE',
+            generated_answer TEXT,
+            filled_successfully INTEGER DEFAULT 1,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (application_id) REFERENCES applications(id) ON DELETE CASCADE
+        )
+    """)
+
+    # Application Answers Cache table (Reusable answers across applications)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS application_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_id INTEGER DEFAULT 1,
+            question TEXT,
+            normalized_question TEXT,
+            question_type TEXT,
+            answer TEXT,
+            job_id TEXT,
+            company TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Agent Settings table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agent_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            auto_answer_descriptive INTEGER DEFAULT 1,
+            auto_submit INTEGER DEFAULT 0,
+            preferred_model TEXT DEFAULT 'openai/gpt-oss-120b',
+            max_answer_words INTEGER DEFAULT 150,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Insert default settings if missing
+    cursor.execute("INSERT OR IGNORE INTO agent_settings (id, auto_answer_descriptive, auto_submit, preferred_model, max_answer_words) VALUES (1, 1, 0, 'openai/gpt-oss-120b', 150)")
 
     conn.commit()
     conn.close()
@@ -112,13 +173,45 @@ def save_profile(profile_data: Dict[str, Any], resume_path: str = "", resume_fil
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    name = profile_data.get("name") or profile_data.get("full_name") or ""
-    email = profile_data.get("email") or ""
-    phone = profile_data.get("phone") or ""
-    location = profile_data.get("location") or ""
-    skills = json.dumps(profile_data.get("skills", []), ensure_ascii=False)
-    exp = str(profile_data.get("experience_years", "") or profile_data.get("experience", ""))
-    edu = str(profile_data.get("education", "") or profile_data.get("college", ""))
+    # Extract top-level or personal fields
+    name = (
+        profile_data.get("personal", {}).get("full_name")
+        if isinstance(profile_data.get("personal"), dict)
+        else profile_data.get("name") or profile_data.get("full_name") or ""
+    )
+    email = (
+        profile_data.get("personal", {}).get("email")
+        if isinstance(profile_data.get("personal"), dict)
+        else profile_data.get("email") or ""
+    )
+    phone = (
+        profile_data.get("personal", {}).get("phone")
+        if isinstance(profile_data.get("personal"), dict)
+        else profile_data.get("phone") or ""
+    )
+    location = (
+        profile_data.get("personal", {}).get("location")
+        if isinstance(profile_data.get("personal"), dict)
+        else profile_data.get("location") or ""
+    )
+
+    skills_data = (
+        profile_data.get("professional", {}).get("key_skills")
+        if isinstance(profile_data.get("professional"), dict)
+        else profile_data.get("skills", [])
+    )
+    skills = json.dumps(skills_data if isinstance(skills_data, list) else [], ensure_ascii=False)
+
+    exp = str(
+        profile_data.get("professional", {}).get("experience_years")
+        if isinstance(profile_data.get("professional"), dict)
+        else profile_data.get("experience_years", "") or profile_data.get("experience", "")
+    )
+    edu = str(
+        profile_data.get("education", {}).get("college_name") or profile_data.get("education", {}).get("degree")
+        if isinstance(profile_data.get("education"), dict)
+        else profile_data.get("education", "") or profile_data.get("college", "")
+    )
     profile_json = json.dumps(profile_data, ensure_ascii=False)
 
     cursor.execute("SELECT id FROM profiles ORDER BY id DESC LIMIT 1")
@@ -319,16 +412,18 @@ def save_application(
     apply_url: str = "",
     job_id: str = "",
     status: str = "APPLY_STARTED",
+    settings: Optional[Dict[str, Any]] = None,
     result: Any = None
 ) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
     result_json = json.dumps(result, ensure_ascii=False) if result is not None else "{}"
+    settings_json = json.dumps(settings, ensure_ascii=False) if settings is not None else "{}"
 
     cursor.execute("""
-        INSERT INTO applications (job_id, job_title, company, job_url, apply_url, status, result_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (job_id, job_title, company, job_url, apply_url or job_url, status, result_json))
+        INSERT INTO applications (job_id, job_title, company, job_url, apply_url, status, result_json, settings_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (job_id, job_title, company, job_url, apply_url or job_url, status, result_json, settings_json))
     app_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -367,6 +462,11 @@ def get_applications(limit: int = 50) -> List[Dict[str, Any]]:
         except Exception:
             res_data = {}
 
+        try:
+            sett_data = json.loads(row["settings_json"]) if "settings_json" in row.keys() and row["settings_json"] else {}
+        except Exception:
+            sett_data = {}
+
         result.append({
             "id": row["id"],
             "job_id": row["job_id"],
@@ -376,6 +476,182 @@ def get_applications(limit: int = 50) -> List[Dict[str, Any]]:
             "company": row["company"],
             "status": row["status"],
             "result": res_data,
+            "settings": sett_data,
             "timestamp": row["timestamp"]
         })
     return result
+
+
+# =========================================================
+# APPLICATION FIELDS LOGGING
+# =========================================================
+
+def save_application_field(
+    application_id: int,
+    field_name: str,
+    question: str,
+    detected_type: str,
+    source: str = "PROFILE",
+    generated_answer: str = "",
+    filled_successfully: bool = True,
+    error: str = None
+) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO application_fields (
+            application_id, field_name, question, detected_type, source,
+            generated_answer, filled_successfully, error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        application_id,
+        field_name[:200],
+        question[:500],
+        detected_type,
+        source,
+        generated_answer,
+        1 if filled_successfully else 0,
+        error
+    ))
+    field_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return field_id
+
+
+def get_application_fields(application_id: int) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM application_fields
+        WHERE application_id = ?
+        ORDER BY id ASC
+    """, (application_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": r["id"],
+            "application_id": r["application_id"],
+            "field_name": r["field_name"],
+            "question": r["question"],
+            "detected_type": r["detected_type"],
+            "source": r["source"],
+            "generated_answer": r["generated_answer"],
+            "filled_successfully": bool(r["filled_successfully"]),
+            "error": r["error"],
+            "created_at": r["created_at"]
+        }
+        for r in rows
+    ]
+
+
+# =========================================================
+# APPLICATION ANSWERS CACHE
+# =========================================================
+
+def save_application_answer(
+    question: str,
+    answer: str,
+    question_type: str = "DESCRIPTIVE",
+    job_id: str = "",
+    company: str = "",
+    candidate_id: int = 1
+):
+    if not question or not answer:
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    norm_q = normalize_question_text(question)
+
+    cursor.execute("""
+        INSERT INTO application_answers (
+            candidate_id, question, normalized_question, question_type,
+            answer, job_id, company, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    """, (candidate_id, question, norm_q, question_type, answer, job_id, company))
+    conn.commit()
+    conn.close()
+
+
+def get_cached_answer(
+    question: str,
+    company: str = "",
+    question_type: str = ""
+) -> Optional[Dict[str, Any]]:
+    if not question:
+        return None
+
+    norm_q = normalize_question_text(question)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 1. Exact or normalized question match for the same company
+    if company:
+        cursor.execute("""
+            SELECT * FROM application_answers
+            WHERE normalized_question = ? AND LOWER(company) = LOWER(?)
+            ORDER BY updated_at DESC LIMIT 1
+        """, (norm_q, company))
+        row = cursor.fetchone()
+        if row:
+            conn.close()
+            return dict(row)
+
+    # 2. General match by question text across any company if general question
+    if question_type not in ["WHY_COMPANY", "COVER_LETTER"]:
+        cursor.execute("""
+            SELECT * FROM application_answers
+            WHERE normalized_question = ?
+            ORDER BY updated_at DESC LIMIT 1
+        """, (norm_q,))
+        row = cursor.fetchone()
+        if row:
+            conn.close()
+            return dict(row)
+
+    conn.close()
+    return None
+
+
+# =========================================================
+# AGENT SETTINGS
+# =========================================================
+
+def get_agent_settings() -> AgentSettings:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM agent_settings WHERE id = 1")
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return AgentSettings()
+
+    return AgentSettings(
+        auto_answer_descriptive=bool(row["auto_answer_descriptive"]),
+        auto_submit=bool(row["auto_submit"]),
+        preferred_model=row["preferred_model"] or "openai/gpt-oss-120b",
+        max_answer_words=row["max_answer_words"] or 150
+    )
+
+
+def save_agent_settings(settings: AgentSettings) -> AgentSettings:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO agent_settings (
+            id, auto_answer_descriptive, auto_submit, preferred_model,
+            max_answer_words, updated_at
+        ) VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    """, (
+        1 if settings.auto_answer_descriptive else 0,
+        1 if settings.auto_submit else 0,
+        settings.preferred_model,
+        settings.max_answer_words
+    ))
+    conn.commit()
+    conn.close()
+    return settings
