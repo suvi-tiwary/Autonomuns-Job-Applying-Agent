@@ -120,6 +120,29 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Ensure missing columns if table already existed from earlier versions
+    def ensure_col(table_name: str, col_name: str, col_def: str):
+        try:
+            cursor.execute(f"PRAGMA table_info({table_name});")
+            existing_cols = [row[1] for row in cursor.fetchall()]
+            if col_name not in existing_cols:
+                cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def};")
+        except Exception:
+            pass
+
+    ensure_col("jobs", "job_hash", "TEXT")
+    ensure_col("jobs", "company_domain", "TEXT")
+    ensure_col("jobs", "company_tier", "TEXT DEFAULT 'emerging'")
+    ensure_col("jobs", "remote_type", "TEXT DEFAULT 'Remote'")
+    ensure_col("jobs", "employment_type", "TEXT DEFAULT 'Full-time'")
+    ensure_col("jobs", "responsibilities", "TEXT")
+    ensure_col("jobs", "freshness_score", "REAL DEFAULT 80.0")
+    ensure_col("jobs", "company_score", "REAL DEFAULT 70.0")
+    ensure_col("jobs", "final_score", "REAL DEFAULT 80.0")
+    ensure_col("jobs", "why_recommended", "TEXT")
+    ensure_col("jobs", "url_validated", "INTEGER DEFAULT 1")
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_job_hash ON jobs(job_hash);")
@@ -182,6 +205,19 @@ def init_db():
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    ensure_col("applications", "user_id", "TEXT DEFAULT 'user_default'")
+    ensure_col("applications", "job_id", "TEXT")
+    ensure_col("applications", "job_title", "TEXT")
+    ensure_col("applications", "company", "TEXT")
+    ensure_col("applications", "job_url", "TEXT")
+    ensure_col("applications", "apply_url", "TEXT")
+    ensure_col("applications", "status", "TEXT DEFAULT 'APPLY_STARTED'")
+    ensure_col("applications", "result_json", "TEXT")
+    ensure_col("applications", "settings_json", "TEXT")
+    ensure_col("applications", "error_message", "TEXT")
+    ensure_col("application_answers", "user_id", "TEXT DEFAULT 'user_default'")
+    ensure_col("application_answers", "normalized_question", "TEXT")
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_applications_user_id ON applications(user_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);")
 
@@ -234,6 +270,7 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    ensure_col("agent_settings", "user_id", "TEXT DEFAULT 'user_default'")
     cursor.execute("""
         INSERT OR IGNORE INTO agent_settings (id, user_id, auto_answer_descriptive, auto_submit, preferred_model, max_answer_words)
         VALUES (1, 'user_default', 1, 0, 'openai/gpt-oss-120b', 150)

@@ -13,3 +13,6 @@ def setup_logging():
     return logging.getLogger("jobmate")
 
 logger = setup_logging()
+
+def get_logger(name: str = "jobmate") -> logging.Logger:
+    return logging.getLogger(name)

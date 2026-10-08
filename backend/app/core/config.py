@@ -11,8 +11,11 @@ load_dotenv(BASE_DIR / ".env")
 
 class Settings(BaseModel):
     PROJECT_NAME: str = "JobMate Autonomous AI Agent"
+    APP_NAME: str = "JobMate Autonomous AI Agent"
     VERSION: str = "2.0.0"
+    APP_VERSION: str = "2.0.0"
     API_V1_STR: str = "/api"
+    CORS_ORIGINS: list = ["*"]
     
     # Environment & Database
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
